@@ -1,0 +1,5 @@
+**/logs/*
+**/outputs/*
+**/runs/*
+get-docker.sh
+*.run
