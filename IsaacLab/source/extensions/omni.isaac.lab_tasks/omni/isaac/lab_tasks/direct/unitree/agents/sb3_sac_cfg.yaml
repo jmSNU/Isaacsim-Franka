@@ -1,0 +1,14 @@
+seed: 42
+
+n_timesteps: !!float 1e6
+policy: 'MlpPolicy'
+batch_size: 64
+learning_rate: 0.0003
+buffer_size: 1000000
+ent_coef: 0.008345
+gamma: 0.99
+tau:  0.005
+train_freq: 1
+gradient_steps: 1
+learning_starts: 1000
+policy_kwargs: "dict(net_arch=[512, 512])"
