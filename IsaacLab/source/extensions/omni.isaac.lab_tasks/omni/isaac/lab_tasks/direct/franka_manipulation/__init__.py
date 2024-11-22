@@ -6,7 +6,7 @@ from .franka_push.franka_push_env import FrankaPushEnv, FrankaPushEnvCfg
 from .franka_push import push_agents
 from .franka_pick.franka_pick_env import FrankaPickEnv, FrankaPickEnvCfg
 from .franka_pick import pick_agents
-
+from .reward_utils import *
 ##
 # Register Gym environments.
 ##
