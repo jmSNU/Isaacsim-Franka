@@ -446,7 +446,7 @@ class FrankaBaseEnv(DirectRLEnv):
         rigth_pad = self.robot.data.body_state_w[:, self.finger_idx[1], 0:3] # (N,3)
 
         pad_y_lr = torch.stack((left_pad[:, 1], rigth_pad[:, 1]), dim = 1) # (N, 2)
-        pad_to_obj_lr = torch.abs(pad_y_lr - obj_pos[:, 1].unsqueeze(-1))
+        pad_to_obj_lr = torch.abs(pad_y_lr - obj_pos[:, 1].unsqueeze(-1)) #(N, 2)
         pad_to_objinit_lr = torch.abs(pad_y_lr - self.target_init_pos[:,1].unsqueeze(-1))
 
         caging_lr_margin = torch.abs(pad_to_objinit_lr - pad_success_thresh)
@@ -469,6 +469,7 @@ class FrankaBaseEnv(DirectRLEnv):
             bounds = (0, xz_thresh),
             margin = caging_xz_margin,
         )
+        
         gripper_closed = torch.where(self.actions[:,-1]>0, self.actions[:,-1], 0)
         gripper_closed = torch.where(gripper_closed<desired_gripper_effort, gripper_closed, desired_gripper_effort)/desired_gripper_effort
         caging = hamacher_product(caging_y, caging_xz)
