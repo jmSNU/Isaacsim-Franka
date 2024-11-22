@@ -6,7 +6,7 @@ from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.utils.math import sample_uniform
 from omni.isaac.lab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from ..franka_manipulation import FrankaBaseEnv, FrankaBaseEnvCfg
-from reward_utils import *
+from ..reward_utils.reward_utils import *
 
 
 @configclass
@@ -31,12 +31,25 @@ class FrankaPushEnv(FrankaBaseEnv):
         reward = torch.zeros(self.num_envs, device = self.device, dtype = torch.float32)
         
         in_place = tolerance(goal_to_target, bounds=(0, 0.05), margin=goal_to_target_init)
-        tcp_target_condition = tcp_to_target < 0.02
+        
+        object_grasped = self._gripper_grasp_reward(
+            self.actions,
+            self.target_pos,
+            obj_reach_radius=0.04,
+            obj_radius=0.02,
+            pad_success_thresh=0.05,
+            xz_thresh=0.05,
+            desired_gripper_effort=0.7,
+            medium_density=True
+        )
+        
+        reward = hamacher_product(object_grasped, in_place)
+        tcp_target_condition = torch.logical_and(tcp_to_target < 0.02, self.actions[:,-1] >0)
         goal_target_condition = goal_to_target < 0.05
         
         reward[tcp_target_condition] += 1.0 + 5.0 * in_place[tcp_target_condition]
         reward[goal_target_condition] = 10.0
-
+        
         return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -81,7 +94,7 @@ class FrankaPushEnv(FrankaBaseEnv):
 
         spawn_pos = _generate_random_target_pos(self.num_envs, self.scene['robot'].device, offset = self.table_pos.cpu())
         self.target.write_root_state_to_sim(spawn_pos[env_ids,:], env_ids = env_ids)
-        self.target_init_pos = spawn_pos.clone()
+        self.target_init_pos = spawn_pos[:,0:3].clone()
 
         if self.cfg.enable_obstacle:
             obstacle_pos = spawn_pos + torch.tensor([0.0,0.15,0.1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0], device = self.device)
