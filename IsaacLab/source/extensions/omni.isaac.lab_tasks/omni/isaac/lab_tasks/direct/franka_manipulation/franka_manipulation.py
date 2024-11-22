@@ -223,7 +223,7 @@ class FrankaBaseEnv(DirectRLEnv):
         self.finger_idx = self.body_ids[-4:-2] # 'panda_leftfinger', 'panda_rightfinger'
         self.pos_joint_ids = self.joint_ids[:3]  # 'panda_joint1', 'panda_joint2', 'panda_joint3'
         self.rot_joint_ids = self.joint_ids[3:6] # 'panda_joint4', 'panda_joint5', 'panda_joint7'
-        self.gripper_joint_ids = self.robot.find_joints(["panda_finger_joint1", "panda_finger_joint2"], preserve_order = True)
+        self.gripper_joint_ids, _ = self.robot.find_joints(["panda_finger_joint1", "panda_finger_joint2"], preserve_order = True)
         self.gripper_open_position = 0.0
         self.gripper_close_position = 20.0
 
@@ -256,7 +256,6 @@ class FrankaBaseEnv(DirectRLEnv):
 
         self.table_pos = self.table.data.root_state_w[:,:3].clone()
         self.target_pos = self.table_pos.clone()
-        self.gripper_open = True
 
 
     def _setup_scene(self):
@@ -342,12 +341,15 @@ class FrankaBaseEnv(DirectRLEnv):
         # Gripper Action
         raw_gripper_action = self.actions[:,-1]
         binary_mask = raw_gripper_action>0
+        binary_mask = binary_mask.unsqueeze(1).expand(-1, 2)
 
-        open_command = torch.zeros(self.gripper_joint_ids, device = self.device)
-        open_command[self.gripper_joint_ids] = self.gripper_open_position
+        open_command = torch.zeros((self.num_envs, 2), device = self.device)
+        open_command[:, 0] = self.gripper_open_position
+        open_command[:, 1] = self.gripper_open_position
 
-        close_command = torch.zeros(self.gripper_joint_ids, device = self.device)
-        close_command[self.gripper_joint_ids] = self.gripper_close_position
+        close_command = torch.zeros((self.num_envs, 2), device = self.device)
+        close_command[:, 0] = self.gripper_close_position
+        close_command[:, 1] = self.gripper_close_position
 
         gripper_action = torch.where(binary_mask, open_command, close_command)
         self.robot.set_joint_position_target(gripper_action, joint_ids = self.gripper_joint_ids)
@@ -407,6 +409,65 @@ class FrankaBaseEnv(DirectRLEnv):
             obstacle_pos = spawn_pos + torch.tensor([0.0,0.15,0.1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0], device = self.device)
             self.obstacle.write_root_state_to_sim(obstacle_pos[env_ids,:], env_ids)
         self.target_pos[env_ids,:] = self.target.data.root_state_w[env_ids,:3].clone()
+
+
+
+    def gripper_grasp_reward(self, action, obj_pos, obj_radius, pad_success_thresh, obj_reach_radius, xz_thresh, desired_gripper_effort = 1.0):
+            """Reward for agent grasping obj.
+
+            Args:
+                action(np.ndarray): (4,) array representing the action
+                    delta(x), delta(y), delta(z), gripper_effort
+                obj_pos(np.ndarray): (3,) array representing the obj x,y,z
+                obj_radius(float):radius of object's bounding sphere
+                pad_success_thresh(float): successful distance of gripper_pad
+                    to object
+                object_reach_radius(float): successful distance of gripper center
+                    to the object.
+                xz_thresh(float): successful distance of gripper in x_z axis to the
+                    object. Y axis not included since the caging function handles
+                        successful grasping in the Y axis.
+                desired_gripper_effort(float): desired gripper effort, defaults to 1.0.
+                high_density(bool): flag for high-density. Cannot be used with medium-density.
+                medium_density(bool): flag for medium-density. Cannot be used with high-density.
+
+            Returns:
+                the reward value
+            """
+
+            left_pad = self.robot.data.body_state_w[:, self.finger_idx[0], 0:3]
+            rigth_pad = self.robot.data.body_state_w[:, self.finger_idx[1], 0:3]
+
+            pad_y_lr = torch.stack((left_pad[:, 1], rigth_pad[:, 1]), dim = 1)
+            pad_to_obj_lr = torch.abs(pad_y_lr - obj_pos[:, 1])
+            pad_to_objinit_lr = torch.abs(pad_y_lr - self.target_init_pos[:,1])
+
+            caging_lr_margin = torch.abs(pad_to_objinit_lr - pad_success_thresh)
+            caging_lr = [
+                tolerance(
+                    pad_to_obj_lr[:, i],
+                    bounds = (obj_radius, pad_success_thresh),
+                    margin = caging_lr_margin[:, i]
+                )
+                for i in range(2)
+            ]
+
+            caging_y = hamacher_product(*caging_lr)
+
+            xz = [0,2]
+            caging_xz_margin = torch.norm(self.target_init_pos[:,xz] - self.init_tcp[:, xz], dim = 1)
+            caging_xz_margin -= xz_thresh
+            caging_xz = tolerance(
+                torch.norm(tcp_pos[:, xz] - obj_pos[:, xz]),
+                bounds = (0, xz_thresh),
+                margin = caging_xz_margin,
+            )
+
+            gripper_closed = torch.min(torch.max(0, self.action[-1]), desired_gripper_effort)/desired_gripper_effort
+            caging = hamacher_product(caging_y, caging_xz)
+            gripping = gripper_closed if caging>0.97 else 0.0
+            caging_and_gripping = hamacher_product(caging, gripping)
+            return (caging_and_gripping + caging)/2
 
 def _generate_random_target_pos(num_envs, device, offset) -> torch.Tensor:
     """Generate random target positions with quaternion and velocities."""
