@@ -6,15 +6,15 @@ from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.utils.math import sample_uniform
 from omni.isaac.lab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from ..franka_manipulation import FrankaBaseEnv, FrankaBaseEnvCfg
+from reward_utils import *
+
 
 @configclass
 class FrankaPushEnvCfg(FrankaBaseEnvCfg):
-    pass
-
+    table_size = (0.7, 0.7)
 
 class FrankaPushEnv(FrankaBaseEnv):
     cfg: FrankaPushEnvCfg
-
     def __init__(self, cfg: FrankaPushEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
         self.goal = self.table_pos.clone()
@@ -23,29 +23,12 @@ class FrankaPushEnv(FrankaBaseEnv):
 
     def _get_rewards(self) -> torch.Tensor:
         self.update_target_pos()
-        tcp_pos = torch.mean(self.robot.data.body_state_w[:, self.hand_idx, 0:3], dim = 1)
+        tcp_pos = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1)
         tcp_to_target = torch.norm(tcp_pos - self.target_pos, dim = 1)
         goal_to_target = torch.norm(self.target_pos - self.goal, dim = 1)
         goal_to_target_init = self.init_dist.clone()
         
         reward = torch.zeros(self.num_envs, device = self.device, dtype = torch.float32)
-
-        def tolerance(x, bounds, margin, value_at_margin=0.1):
-            lower, upper = bounds
-            assert lower < upper and torch.all(margin > 0)
-            
-            # Check if x is within bounds
-            in_bounds = torch.logical_and(lower <= x, x <= upper)
-            
-            if torch.all(margin == 0):
-                value = torch.where(in_bounds, 1.0, 0.0)
-            else:
-                # Compute distance d and apply sigmoid function
-                d = torch.where(x < lower, lower - x, x - upper) / margin
-                sigmoid = lambda x, value_at_1: 1 / ((x * np.sqrt(1 / value_at_1 - 1))**2 + 1)
-                value = torch.where(in_bounds, 1.0, sigmoid(d, value_at_margin))
-
-            return value
         
         in_place = tolerance(goal_to_target, bounds=(0, 0.05), margin=goal_to_target_init)
         tcp_target_condition = tcp_to_target < 0.02
@@ -57,12 +40,12 @@ class FrankaPushEnv(FrankaBaseEnv):
         return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        tcp_pos = torch.mean(self.robot.data.body_state_w[:, self.hand_idx, 0:3], dim = 1)
+        tcp_pos = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1)
         self.update_target_pos()
         goal_to_target = torch.norm(tcp_pos - self.goal, dim=1)
         tcp_to_target = torch.norm(tcp_pos - self.target_pos, dim = 1)
         
-        undesired_contact_body_ids,_ = self.sensor.find_bodies(['base_link', 'shoulder_link', 'upper_arm_link', 'forearm_link', 'wrist_1_link', 'wrist_2_link', 'wrist_3_link', 'flange', 'tool0', 'robotiq_base_link', 'gripper_center', 'left_outer_knuckle', 'left_inner_knuckle', 'right_inner_knuckle', 'right_outer_knuckle', 'left_outer_finger'])
+        undesired_contact_body_ids,_ = self.sensor.find_bodies(['panda_link0', 'panda_link1', 'panda_link2', 'panda_link3', 'panda_link4', 'panda_link5', 'panda_link6', 'panda_link7'])
         contacts_dones_condition = torch.any(torch.norm(self.sensor.data.net_forces_w[:, undesired_contact_body_ids, :], dim=-1) > 1e-3, dim = -1)
         dones = torch.logical_or(contacts_dones_condition, self.target_pos[:,-1]<0.8)
         dones = torch.logical_or(tcp_to_target>=1.0, dones)
@@ -94,9 +77,11 @@ class FrankaPushEnv(FrankaBaseEnv):
         joint_vel = torch.zeros_like(joint_pos)
         self.robot.set_joint_position_target(joint_pos, env_ids=env_ids)
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+        self.init_tcp = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1)
 
         spawn_pos = _generate_random_target_pos(self.num_envs, self.scene['robot'].device, offset = self.table_pos.cpu())
         self.target.write_root_state_to_sim(spawn_pos[env_ids,:], env_ids = env_ids)
+        self.target_init_pos = spawn_pos.clone()
 
         if self.cfg.enable_obstacle:
             obstacle_pos = spawn_pos + torch.tensor([0.0,0.15,0.1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0], device = self.device)
@@ -109,7 +94,6 @@ class FrankaPushEnv(FrankaBaseEnv):
         self.goal[env_ids,1] = torch.clamp(self.goal[env_ids,1], self.table_pos[env_ids,1] - self.cfg.table_size[1], self.table_pos[env_ids,1] + self.cfg.table_size[1])
 
         self.init_dist[env_ids] = torch.norm(self.target_pos[env_ids,:] - self.goal[env_ids,:], dim = 1)
-        self.spawn_pos[env_ids,:] = self.target_pos[env_ids,:].clone() # original spawn position
 
         marker_locations = self.goal
         marker_orientations = torch.tensor([1, 0, 0, 0],dtype=torch.float32).repeat(self.num_envs,1).to(self.device)  
