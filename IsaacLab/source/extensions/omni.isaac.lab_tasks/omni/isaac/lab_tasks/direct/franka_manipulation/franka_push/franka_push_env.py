@@ -69,38 +69,7 @@ class FrankaPushEnv(FrankaBaseEnv):
         return dones, time_out
     
     def _reset_idx(self, env_ids: Sequence[int] | None):
-        if env_ids is None:
-            env_ids = self.robot._ALL_INDICES
-
-        self.robot.reset(env_ids)
-        self.camera.reset(env_ids)
-        self.sensor.reset(env_ids)
-        self.table.reset(env_ids)
-        self.target.reset(env_ids)
-        self.diff_ik_controller.reset(env_ids)
-        self.diff_ik_controller_position.reset(env_ids)
         super()._reset_idx(env_ids)
-
-        joint_pos = self.robot.data.default_joint_pos[env_ids] + sample_uniform(
-            -0.125,
-            0.125,
-            (len(env_ids), self.num_joints),
-            self.device,
-        )
-        joint_vel = torch.zeros_like(joint_pos)
-        self.robot.set_joint_position_target(joint_pos, env_ids=env_ids)
-        self.robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
-        self.init_tcp = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1)
-
-        spawn_pos = _generate_random_target_pos(self.num_envs, self.scene['robot'].device, offset = self.table_pos.cpu())
-        self.target.write_root_state_to_sim(spawn_pos[env_ids,:], env_ids = env_ids)
-        self.target_init_pos = spawn_pos[:,0:3].clone()
-
-        if self.cfg.enable_obstacle:
-            obstacle_pos = spawn_pos + torch.tensor([0.0,0.15,0.1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0], device = self.device)
-            self.obstacle.write_root_state_to_sim(obstacle_pos[env_ids,:], env_ids)
-        self.target_pos[env_ids,:] = self.target.data.root_state_w[env_ids,:3].clone() # moving object's position
-
         goal_pose = self.update_goal_pose()
         self.goal[env_ids,:] = goal_pose[env_ids,:3].clone() # destination to arrive
         self.goal[env_ids,0] = torch.clamp(self.goal[env_ids,0], self.table_pos[env_ids,0] - self.cfg.table_size[0], self.table_pos[env_ids,0] + self.cfg.table_size[0])
@@ -112,7 +81,6 @@ class FrankaPushEnv(FrankaBaseEnv):
         marker_orientations = torch.tensor([1, 0, 0, 0],dtype=torch.float32).repeat(self.num_envs,1).to(self.device)  
         marker_indices = torch.zeros((self.num_envs,), dtype=torch.int32)  
         self.target_marker.visualize(translations = marker_locations, orientations = marker_orientations, marker_indices = marker_indices)
-
 
     def update_target_pos(self):
         self.target_pos = self.target.data.root_state_w[:,:3].clone()
@@ -128,23 +96,6 @@ class FrankaPushEnv(FrankaBaseEnv):
         z = target_pos[:, 2].unsqueeze(1)
 
         return torch.cat((x, y, z), dim=1)
-
-def _generate_random_target_pos(num_envs, device, offset) -> torch.Tensor:
-    """Generate random target positions with quaternion and velocities."""
-    table_size = (0.7, 0.7)  # x, y size of the table
-    x = torch.rand(num_envs, 1) * (table_size[0] / 4)
-    y = torch.rand(num_envs, 1) * (table_size[1] / 2) - (table_size[1] / 4)
-    z = torch.ones((num_envs, 1)) * 0.5
-
-    quaternion = torch.tensor([0.7071, 0.0, 0.7071, 0.0]).repeat(num_envs, 1)
-    translational_velocity = torch.zeros((num_envs, 3))
-    rotational_velocity = torch.zeros((num_envs, 3))
-
-    target_pos = torch.cat((x, y, z), dim=1) + offset
-    combined_tensor = torch.cat((target_pos, quaternion, translational_velocity, rotational_velocity), dim=1)
-    combined_tensor = combined_tensor.to(device)
-
-    return combined_tensor
 
 def _define_markers() -> VisualizationMarkers:
     """Define markers to visualize the target position."""
