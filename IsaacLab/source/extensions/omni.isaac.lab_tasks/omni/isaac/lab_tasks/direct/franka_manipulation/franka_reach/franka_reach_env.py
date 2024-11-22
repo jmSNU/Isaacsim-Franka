@@ -39,7 +39,7 @@ class FrankaReachEnv(FrankaBaseEnv):
         self.update_target_pos()
         distances = torch.norm(ee_pos - self.target_pos, dim=1)
         
-        undesired_contact_body_ids,_ = self.sensor.find_bodies(['base_link', 'shoulder_link', 'upper_arm_link', 'forearm_link', 'wrist_1_link', 'wrist_2_link', 'wrist_3_link'])
+        undesired_contact_body_ids,_ = self.sensor.find_bodies(['panda_link0', 'panda_link1', 'panda_link2', 'panda_link3', 'panda_link4', 'panda_link5', 'panda_link6', 'panda_link7'])
         dones = torch.empty((self.num_envs,), dtype = torch.bool, device = self.device)
         for env_id in range(self.num_envs):
             dones[env_id] = distances[env_id] <= 0.01 or distances[env_id] >= 1.5 or torch.any(torch.norm(self.sensor.data.net_forces_w[env_id, undesired_contact_body_ids, :], dim=-1) > 1e-3) or self.target_pos[env_id,-1] < 0.8
