@@ -21,15 +21,18 @@ from omni.isaac.lab.utils.noise.noise_cfg import GaussianNoiseCfg, NoiseModelWit
 from omni.isaac.lab.envs import mdp
 from omni.isaac.lab.managers import EventTermCfg as EventTerm
 from .reward_utils.reward_utils import *
+from omni.isaac.lab.markers import VisualizationMarkers, VisualizationMarkersCfg
+
 
 @configclass
 class FrankaBaseEnvCfg(DirectRLEnvCfg):
     decimation = 2
     episode_length_s = 5.0
-    action_scale = 0.1
+    action_scale = 1.0
     num_actions = 7+1 # (x, y, z, qw, qx, qy, qz) + gripper
     num_observations = 64*64*3 # rgb image
     enable_obstacle = False
+    table_size = (0.7, 0.7, 1.0)
 
     # ground plane
     terrain = TerrainImporterCfg(
@@ -49,7 +52,7 @@ class FrankaBaseEnvCfg(DirectRLEnvCfg):
     table = RigidObjectCfg(
         prim_path="/World/envs/env_.*/Table",
         spawn=sim_utils.MeshCuboidCfg(
-            size=(0.7, 0.7, 1.0),
+            size = table_size,
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 disable_gravity=True,  
                 kinematic_enabled = True # make table static
@@ -113,7 +116,7 @@ class FrankaBaseEnvCfg(DirectRLEnvCfg):
     camera = CameraCfg(
         prim_path="/World/envs/env_.*/Robot/camera",
         offset=CameraCfg.OffsetCfg(
-            pos=(2.5, 0.0, 0.8), 
+            pos=(2.0, 0.0, 0.8), 
             rot=(0.0, 0.131, 0.0, -0.991), 
             convention="world"
         ),  
@@ -196,7 +199,6 @@ class FrankaBaseEnvCfg(DirectRLEnvCfg):
     ),
     }
 
-
 class FrankaBaseEnv(DirectRLEnv):
     cfg: FrankaBaseEnvCfg
 
@@ -254,10 +256,13 @@ class FrankaBaseEnv(DirectRLEnv):
             },
         )
         self.diff_ik_controller = DifferentialIKController(ik_cfg, num_envs=cfg.scene.num_envs, device=self.scene["robot"].device)
-
+        self.init_tcp = torch.zeros((self.num_envs, 3), device = self.device, dtype = torch.float32)
         self.table_pos = self.table.data.root_state_w[:,:3].clone()
         self.target_pos = self.table_pos.clone()
 
+        self.goal = self.table_pos.clone()
+        self.init_dist = torch.norm(self.target_pos - self.goal, dim = 1)
+        self.target_marker = self._define_markers() # visualize the target position  
 
     def _setup_scene(self):
         # Scene setting : robot, camera, table, walls, YCB Target
@@ -295,8 +300,8 @@ class FrankaBaseEnv(DirectRLEnv):
 
     def _apply_action(self) -> None:
         # clipping action
-        pos_low = torch.tensor(np.array([-0.05,-0.05,-0.05]), device = self.device)
-        pos_high = torch.tensor(np.array([0.05,0.05,0.05]), device = self.device)
+        pos_low = torch.tensor(np.array([-0.1,-0.1,-0.1]), device = self.device)
+        pos_high = torch.tensor(np.array([0.1,0.1,0.1]), device = self.device)
         roll_range = torch.tensor(np.array([-np.pi*5/180, np.pi*5/180]), device = self.device)
         pitch_range = torch.tensor(np.array([-np.pi*5/180, np.pi*5/180]), device = self.device)
         yaw_range = torch.tensor(np.array([-np.pi*5/180, np.pi*5/180]), device = self.device)
@@ -305,7 +310,7 @@ class FrankaBaseEnv(DirectRLEnv):
 
         # clipping ee position
         low = self.table_pos + torch.tensor(np.array([0.0, -0.2, 0.5]), device = self.device)
-        high = self.table_pos + torch.tensor(np.array([0.2, 0.2, 0.8]), device = self.device)
+        high = self.table_pos + torch.tensor(np.array([0.2, 0.2, 1.0]), device = self.device)
         dummy_pos = torch.zeros(self.num_envs, 3, device = self.device, dtype = torch.float32)
 
         ee_pose_w = self.robot.data.body_state_w[:, self.ee_idx, 0:7]
@@ -371,6 +376,8 @@ class FrankaBaseEnv(DirectRLEnv):
     def _get_observations(self) -> dict:
         img = self.camera.data.output['rgb'] #(num_envs, H, W, 4)
         img = img[:, :, :, :-1] 
+        for env_id in range(self.num_envs):
+            cv2.imwrite(f"obs/obs_{env_id}.png", img[env_id,:,:,:].cpu().numpy())
         img = img.reshape(self.num_envs,-1).float()
         observations = {"policy": img}
         return observations
@@ -400,6 +407,7 @@ class FrankaBaseEnv(DirectRLEnv):
             (len(env_ids), self.num_joints),
             self.device,
         )
+
         joint_vel = torch.zeros_like(joint_pos)
         self.robot.set_joint_position_target(joint_pos, env_ids=env_ids)
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
@@ -413,8 +421,17 @@ class FrankaBaseEnv(DirectRLEnv):
             self.obstacle.write_root_state_to_sim(obstacle_pos[env_ids,:], env_ids)
 
         self.target_pos[env_ids,:] = self.target.data.root_state_w[env_ids,:3].clone()
-        self.init_tcp = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1) # (N, 3)
+        self.init_tcp[env_ids,:] = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1)[env_ids,:] # (N, 3)
 
+        goal_pose = self.update_goal_pose()
+        self.goal[env_ids,:] = goal_pose[env_ids,:3].clone() # destination to arrive
+
+        self.init_dist[env_ids] = torch.norm(self.target_pos[env_ids,:] - self.goal[env_ids,:], dim = 1)
+
+        marker_locations = self.goal
+        marker_orientations = torch.tensor([1, 0, 0, 0],dtype=torch.float32).repeat(self.num_envs,1).to(self.device)  
+        marker_indices = torch.zeros((self.num_envs,), dtype=torch.int32)  
+        self.target_marker.visualize(translations = marker_locations, orientations = marker_orientations, marker_indices = marker_indices)
 
     def _gripper_grasp_reward(self, action, obj_pos, obj_radius, pad_success_thresh, obj_reach_radius, xz_thresh, desired_gripper_effort = 1.0, high_density = False, medium_density = False):
         """Reward for agent grasping obj.
@@ -490,6 +507,39 @@ class FrankaBaseEnv(DirectRLEnv):
             caging_and_gripping = (caging_and_gripping + reach.to(torch.float32)) / 2
 
         return caging_and_gripping
+    
+    def update_target_pos(self):
+        self.target_pos = self.target.data.root_state_w[:,:3].clone()
+
+    def update_goal_pose(self):
+        target_pos = self.target_pos.clone()
+        dx = (torch.rand(self.num_envs, 1) * 0.05 + 0.05) * (torch.randint(0, 2, (self.num_envs, 1)) * 2 - 1)
+        # Generate random numbers between 0.1 and 0.2 or -0.2 and -0.1
+        dy = (torch.rand(self.num_envs, 1) * 0.1 + 0.1) * (torch.randint(0, 2, (self.num_envs, 1)) * 2 - 1)
+        dz = torch.rand(self.num_envs, 1) * 0.5
+
+        x = target_pos[:, 0].unsqueeze(1) + dx.to(self.device)
+        y = target_pos[:, 1].unsqueeze(1) + dy.to(self.device)
+        z = target_pos[:, 2].unsqueeze(1) + dz.to(self.device)
+
+        output = torch.cat((x,y,z), dim = 1)
+        output[:, 0] = torch.clamp(output[:,0], self.table_pos[:, 0] - self.cfg.table_size[0], self.table_pos[:, 0] + self.cfg.table_size[0])
+        output[:, 1] = torch.clamp(output[:,1], self.table_pos[:, 1] - self.cfg.table_size[1], self.table_pos[:, 1] + self.cfg.table_size[1])
+        output[:, 2] = torch.clamp(output[:,2], 1.0, 2.0)
+        return output
+    
+    def _define_markers(self) -> VisualizationMarkers:
+        """Define markers to visualize the target position."""
+        marker_cfg = VisualizationMarkersCfg(
+            prim_path="/Visuals/TargetMarkers",
+            markers={
+                "target": sim_utils.SphereCfg(  
+                    radius=0.05,  
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)), 
+                ),
+            },
+        )
+        return VisualizationMarkers(marker_cfg)
 
 def _generate_random_target_pos(num_envs, device, offset) -> torch.Tensor:
     """Generate random target positions with quaternion and velocities."""
