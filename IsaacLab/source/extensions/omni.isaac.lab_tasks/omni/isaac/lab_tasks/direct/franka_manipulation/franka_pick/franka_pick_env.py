@@ -12,7 +12,6 @@ from ..reward_utils.reward_utils import *
 class FrankaPickEnvCfg(FrankaBaseEnvCfg):
     table_size = (0.7, 0.7)
 
-
 class FrankaPickEnv(FrankaBaseEnv):
     cfg: FrankaPickEnvCfg
 
@@ -142,22 +141,7 @@ class FrankaPickEnv(FrankaBaseEnv):
         marker_orientations = torch.tensor([1, 0, 0, 0],dtype=torch.float32).repeat(self.num_envs,1).to(self.device)  
         marker_indices = torch.zeros((self.num_envs,), dtype=torch.int32)  
         self.target_marker.visualize(translations = marker_locations, orientations = marker_orientations, marker_indices = marker_indices)
-
-    def update_target_pos(self):
-        self.target_pos = self.target.data.root_state_w[:,:3].clone()
-
-    def update_goal_pose(self):
-        target_pos = self.target_pos.clone()
-        dx = (torch.rand(self.num_envs, 1) * 0.05 + 0.05) * (torch.randint(0, 2, (self.num_envs, 1)) * 2 - 1)
-        # Generate random numbers between 0.1 and 0.2 or -0.2 and -0.1
-        dy = (torch.rand(self.num_envs, 1) * 0.1 + 0.1) * (torch.randint(0, 2, (self.num_envs, 1)) * 2 - 1)
-        dz = torch.rand(self.num_envs, 1) * 0.5
-
-        x = target_pos[:, 0].unsqueeze(1) + dx.to(self.device)
-        y = target_pos[:, 1].unsqueeze(1) + dy.to(self.device)
-        z = target_pos[:, 2].unsqueeze(1) + dz.to(self.device)
-
-        return torch.cat((x, y, z), dim=1)
+    
 
 def _define_markers() -> VisualizationMarkers:
     """Define markers to visualize the target position."""
