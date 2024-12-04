@@ -3,3 +3,4 @@
 **/runs/*
 get-docker.sh
 *.run
+obs_*.png
