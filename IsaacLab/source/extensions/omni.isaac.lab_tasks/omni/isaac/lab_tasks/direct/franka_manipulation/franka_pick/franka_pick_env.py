@@ -130,11 +130,8 @@ class FrankaPickEnv(FrankaBaseEnv):
         self.init_left_pad = self.robot.data.body_state_w[:, self.finger_idx[0], 0:3]
         self.init_right_pad = self.robot.data.body_state_w[:, self.finger_idx[1], 0:3]
 
-        goal_pose = self.update_goal_pose()
+        goal_pose = self.update_goal_or_target(target_pos=self.target_pos.clone(), dz_range=(0.5, 1.0))
         self.goal[env_ids,:] = goal_pose[env_ids,:3].clone() # destination to arrive
-        self.goal[env_ids,0] = torch.clamp(self.goal[env_ids,0], self.table_pos[env_ids,0] - self.cfg.table_size[0], self.table_pos[env_ids,0] + self.cfg.table_size[0])
-        self.goal[env_ids,1] = torch.clamp(self.goal[env_ids,1], self.table_pos[env_ids,1] - self.cfg.table_size[1], self.table_pos[env_ids,1] + self.cfg.table_size[1])
-
         self.init_dist[env_ids] = torch.norm(self.target_pos[env_ids,:] - self.goal[env_ids,:], dim = 1)
 
         marker_locations = self.goal
@@ -142,7 +139,6 @@ class FrankaPickEnv(FrankaBaseEnv):
         marker_indices = torch.zeros((self.num_envs,), dtype=torch.int32)  
         self.target_marker.visualize(translations = marker_locations, orientations = marker_orientations, marker_indices = marker_indices)
     
-
 def _define_markers() -> VisualizationMarkers:
     """Define markers to visualize the target position."""
     marker_cfg = VisualizationMarkersCfg(
