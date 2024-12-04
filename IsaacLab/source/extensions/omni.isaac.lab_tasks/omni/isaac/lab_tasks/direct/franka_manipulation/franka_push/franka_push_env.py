@@ -68,28 +68,12 @@ class FrankaPushEnv(FrankaBaseEnv):
     def _reset_idx(self, env_ids: Sequence[int] | None):
         super()._reset_idx(env_ids)
 
-        goal_pose = self.update_goal_pose()
+        goal_pose = self.update_goal_or_target(target_pos=self.target_pos.clone(), dz_range=(0.5, 0.5))
         self.goal[env_ids,:] = goal_pose[env_ids,:3].clone() # destination to arrive
-        self.goal[env_ids,0] = torch.clamp(self.goal[env_ids,0], self.table_pos[env_ids,0] - self.cfg.table_size[0], self.table_pos[env_ids,0] + self.cfg.table_size[0])
-        self.goal[env_ids,1] = torch.clamp(self.goal[env_ids,1], self.table_pos[env_ids,1] - self.cfg.table_size[1], self.table_pos[env_ids,1] + self.cfg.table_size[1])
-        self.goal[env_ids, 2] = 1.0
-
         self.init_dist[env_ids] = torch.norm(self.target_pos[env_ids,:] - self.goal[env_ids,:], dim = 1)
 
         marker_locations = self.goal
         marker_orientations = torch.tensor([1, 0, 0, 0],dtype=torch.float32).repeat(self.num_envs,1).to(self.device)  
         marker_indices = torch.zeros((self.num_envs,), dtype=torch.int32)  
         self.target_marker.visualize(translations = marker_locations, orientations = marker_orientations, marker_indices = marker_indices)
-
-    def update_goal_pose(self):
-        target_pos = self.target_pos.clone()
-        dx = (torch.rand(self.num_envs, 1) * 0.05 + 0.05) * (torch.randint(0, 2, (self.num_envs, 1)) * 2 - 1)
-        # Generate random numbers between 0.1 and 0.2 or -0.2 and -0.1
-        dy = (torch.rand(self.num_envs, 1) * 0.1 + 0.1) * (torch.randint(0, 2, (self.num_envs, 1)) * 2 - 1)
-
-        x = target_pos[:, 0].unsqueeze(1) + dx.to(self.device)
-        y = target_pos[:, 1].unsqueeze(1) + dy.to(self.device)
-        z = target_pos[:, 2].unsqueeze(1)
-
-        return torch.cat((x, y, z), dim=1)
 
