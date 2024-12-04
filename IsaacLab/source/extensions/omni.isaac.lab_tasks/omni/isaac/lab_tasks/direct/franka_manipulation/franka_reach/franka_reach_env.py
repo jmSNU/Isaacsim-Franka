@@ -5,8 +5,7 @@ from ..reward_utils.reward_utils import *
 
 @configclass
 class FrankaReachEnvCfg(FrankaBaseEnvCfg):
-    pass
-
+    table_size = (0.7, 0.7)
 
 class FrankaReachEnv(FrankaBaseEnv):
     cfg: FrankaReachEnvCfg
@@ -17,10 +16,11 @@ class FrankaReachEnv(FrankaBaseEnv):
     def _get_rewards(self) -> torch.Tensor:
         tcp = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1)
         self.update_target_pos()
-        tcp_to_target = torch.norm(tcp-self.target_pos, dim = 1)
-        in_place_margin = torch.norm(self.init_tcp - self.target_pos, dim = 1)
+
+        tcp_to_goal = torch.norm(tcp - self.goal, dim = 1)
+        in_place_margin = torch.norm(self.init_tcp - self.goal, dim = 1)
         in_place = tolerance(
-            tcp_to_target,
+            tcp_to_goal,
             bounds = (0, 0.05),
             margin = in_place_margin,
         )
@@ -40,5 +40,4 @@ class FrankaReachEnv(FrankaBaseEnv):
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         return dones, time_out
 
-    def update_target_pos(self):
-        self.target_pos = self.target.data.root_state_w[:,:3].clone()
+    
