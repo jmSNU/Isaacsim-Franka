@@ -116,8 +116,8 @@ class FrankaBaseEnvCfg(DirectRLEnvCfg):
     camera = CameraCfg(
         prim_path="/World/envs/env_.*/Robot/camera",
         offset=CameraCfg.OffsetCfg(
-            pos=(2.0, 0.0, 0.8), 
-            rot=(0.0, 0.131, 0.0, -0.991), 
+            pos=(2.7, 0.0, 1.2), 
+            rot=(0.0, -0.174, 0.0, 0.985), 
             convention="world"
         ),  
         spawn=sim_utils.PinholeCameraCfg(
@@ -227,6 +227,7 @@ class FrankaBaseEnv(DirectRLEnv):
         self.pos_joint_ids = self.joint_ids[:3]  # 'panda_joint1', 'panda_joint2', 'panda_joint3'
         self.rot_joint_ids = self.joint_ids[3:6] # 'panda_joint4', 'panda_joint5', 'panda_joint7'
         self.gripper_joint_ids = self.joint_ids[-2:] 
+        self.undesired_contact_body_ids, _ = self.robot.find_bodies(['panda_link0', 'panda_link1', 'panda_link2', 'panda_link3', 'panda_link4', 'panda_link5', 'panda_link6', 'panda_link7'])
         self.gripper_open_position = 0.0
         self.gripper_close_position = 20.0
 
@@ -300,8 +301,8 @@ class FrankaBaseEnv(DirectRLEnv):
 
     def _apply_action(self) -> None:
         # clipping action
-        pos_low = torch.tensor(np.array([-0.1,-0.1,-0.1]), device = self.device)
-        pos_high = torch.tensor(np.array([0.1,0.1,0.1]), device = self.device)
+        pos_low = torch.tensor(np.array([-0.1,-0.2,-0.2]), device = self.device)
+        pos_high = torch.tensor(np.array([0.2,0.2,0.2]), device = self.device)
         roll_range = torch.tensor(np.array([-np.pi*5/180, np.pi*5/180]), device = self.device)
         pitch_range = torch.tensor(np.array([-np.pi*5/180, np.pi*5/180]), device = self.device)
         yaw_range = torch.tensor(np.array([-np.pi*5/180, np.pi*5/180]), device = self.device)
@@ -309,8 +310,8 @@ class FrankaBaseEnv(DirectRLEnv):
         quat_high = quat_from_euler_xyz(roll_range[1], pitch_range[1], yaw_range[1])
 
         # clipping ee position
-        low = self.table_pos + torch.tensor(np.array([0.0, -0.2, 0.5]), device = self.device)
-        high = self.table_pos + torch.tensor(np.array([0.2, 0.2, 1.0]), device = self.device)
+        low = self.table_pos + torch.tensor(np.array([-0.2, -0.3, 0.5]), device = self.device)
+        high = self.table_pos + torch.tensor(np.array([0.2, 0.3, 1.0]), device = self.device)
         dummy_pos = torch.zeros(self.num_envs, 3, device = self.device, dtype = torch.float32)
 
         ee_pose_w = self.robot.data.body_state_w[:, self.ee_idx, 0:7]
@@ -423,9 +424,8 @@ class FrankaBaseEnv(DirectRLEnv):
         self.target_pos[env_ids,:] = self.target.data.root_state_w[env_ids,:3].clone()
         self.init_tcp[env_ids,:] = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1)[env_ids,:] # (N, 3)
 
-        goal_pose = self.update_goal_or_target(target_pos=self.target_pos.clone(), dz_range= (0.5, 1.0))
+        goal_pose = self.update_goal_or_target(target_pos=self.target_pos.clone(), dz_range= (0, 0.3))
         self.goal[env_ids,:] = goal_pose[env_ids,:3].clone() # destination to arrive
-
         self.init_dist[env_ids] = torch.norm(self.target_pos[env_ids,:] - self.goal[env_ids,:], dim = 1)
 
         marker_locations = self.goal
@@ -451,7 +451,8 @@ class FrankaBaseEnv(DirectRLEnv):
             tolerance(
                 pad_to_obj_lr[:, i],
                 bounds = (obj_radius, pad_success_thresh),
-                margin = caging_lr_margin[:, i]
+                margin = caging_lr_margin[:, i],
+                sigmoid="long_tail"
             )
             for i in range(2)
         ]
@@ -465,6 +466,7 @@ class FrankaBaseEnv(DirectRLEnv):
             torch.norm(tcp_pos[:, xz] - obj_pos[:, xz]),
             bounds = (0, xz_thresh),
             margin = caging_xz_margin,
+            sigmoid="long_tail"
         )
         
         gripper_closed = torch.where(action[:, -1] < 0, desired_gripper_effort, 0.0)  # 음수면 닫힘, 양수면 열림
@@ -483,6 +485,7 @@ class FrankaBaseEnv(DirectRLEnv):
                 tcp_to_obj,
                 bounds=(0, obj_reach_radius),
                 margin=reach_margin,
+                sigmoid="long_tail"
             )
             caging_and_gripping = (caging_and_gripping + reach.to(torch.float32)) / 2
 
