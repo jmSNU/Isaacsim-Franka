@@ -27,7 +27,11 @@ class FrankaPushEnv(FrankaBaseEnv):
         
         reward = torch.zeros(self.num_envs, device = self.device, dtype = torch.float32)
         
-        in_place = tolerance(goal_to_target, bounds=(0, 0.05), margin=goal_to_target_init)
+        in_place = tolerance(
+            goal_to_target, 
+            bounds=(0, 0.05), 
+            margin=goal_to_target_init, 
+            sigmoid="long_tail")
         
         object_grasped = self._gripper_grasp_reward(
             self.actions,
@@ -55,8 +59,7 @@ class FrankaPushEnv(FrankaBaseEnv):
         goal_to_target = torch.norm(tcp_pos - self.goal, dim=1)
         tcp_to_target = torch.norm(tcp_pos - self.target_pos, dim = 1)
         
-        undesired_contact_body_ids,_ = self.sensor.find_bodies(['panda_link0', 'panda_link1', 'panda_link2', 'panda_link3', 'panda_link4', 'panda_link5', 'panda_link6', 'panda_link7'])
-        contacts_dones_condition = torch.any(torch.norm(self.sensor.data.net_forces_w[:, undesired_contact_body_ids, :], dim=-1) > 1e-3, dim = -1)
+        contacts_dones_condition = torch.any(torch.norm(self.sensor.data.net_forces_w[:, self.undesired_contact_body_ids, :], dim=-1) > 1e-3, dim = -1)
         dones = torch.logical_or(contacts_dones_condition, self.target_pos[:,-1]<0.8)
         dones = torch.logical_or(tcp_to_target>=1.0, dones)
         dones = torch.logical_or(goal_to_target>=0.7, dones)
@@ -68,7 +71,7 @@ class FrankaPushEnv(FrankaBaseEnv):
     def _reset_idx(self, env_ids: Sequence[int] | None):
         super()._reset_idx(env_ids)
 
-        goal_pose = self.update_goal_or_target(target_pos=self.target_pos.clone(), dz_range=(0.5, 0.5))
+        goal_pose = self.update_goal_or_target(target_pos=self.target_pos.clone(), dz_range=(0.0, 0.0))
         self.goal[env_ids,:] = goal_pose[env_ids,:3].clone() # destination to arrive
         self.init_dist[env_ids] = torch.norm(self.target_pos[env_ids,:] - self.goal[env_ids,:], dim = 1)
 
