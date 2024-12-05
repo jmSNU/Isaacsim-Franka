@@ -17,9 +17,6 @@ class FrankaPickEnv(FrankaBaseEnv):
 
     def __init__(self, cfg: FrankaPickEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
-        self.goal = self.table_pos.clone()
-        self.init_dist = torch.norm(self.target_pos - self.goal, dim = 1)
-        self.target_marker = _define_markers() # visualize the target position  
 
     def _gripper_grasp_reward(self, action, obj_pos, obj_radius = 0, pad_success_thresh = 0, obj_reach_radius = 0, xz_thresh = 0, desired_gripper_effort=1, high_density=False, medium_density=False):
         pad_success_margin = 0.05
@@ -41,12 +38,14 @@ class FrankaPickEnv(FrankaBaseEnv):
         right_caging = tolerance(
             delta_obj_y_right_pad, 
             bounds = (obj_radius, pad_success_margin),
-            margin = right_caging_margin
+            margin = right_caging_margin,
+            sigmoid="long_tail"
         )
         left_caging = tolerance(
             delta_obj_y_left_pad,
             bounds = (obj_radius, pad_success_margin),
-            margin = left_caging_margin
+            margin = left_caging_margin,
+            sigmoid="long_tail"
         )
 
         y_caging = hamacher_product(left_caging, right_caging)
@@ -94,6 +93,7 @@ class FrankaPickEnv(FrankaBaseEnv):
             goal_to_target,
             bounds=(0, 0.05),
             margin=inplace_margin,
+            sigmoid="long_tail"
         )
 
         object_grasped = self._gripper_grasp_reward(self.actions, obj)
@@ -115,8 +115,7 @@ class FrankaPickEnv(FrankaBaseEnv):
         goal_to_target = torch.norm(tcp_pos - self.goal, dim=1)
         tcp_to_target = torch.norm(tcp_pos - self.target_pos, dim = 1)
         
-        undesired_contact_body_ids,_ = self.sensor.find_bodies(['panda_link0', 'panda_link1', 'panda_link2', 'panda_link3', 'panda_link4', 'panda_link5', 'panda_link6', 'panda_link7'])
-        contacts_dones_condition = torch.any(torch.norm(self.sensor.data.net_forces_w[:, undesired_contact_body_ids, :], dim=-1) > 1e-3, dim = -1)
+        contacts_dones_condition = torch.any(torch.norm(self.sensor.data.net_forces_w[:, self.undesired_contact_body_ids, :], dim=-1) > 1e-3, dim = -1)
         dones = torch.logical_or(contacts_dones_condition, self.target_pos[:,-1]<0.8)
         dones = torch.logical_or(tcp_to_target>=1.0, dones)
         dones = torch.logical_or(goal_to_target>=0.7, dones)
@@ -129,25 +128,4 @@ class FrankaPickEnv(FrankaBaseEnv):
         super()._reset_idx(env_ids)
         self.init_left_pad = self.robot.data.body_state_w[:, self.finger_idx[0], 0:3]
         self.init_right_pad = self.robot.data.body_state_w[:, self.finger_idx[1], 0:3]
-
-        goal_pose = self.update_goal_or_target(target_pos=self.target_pos.clone(), dz_range=(0.5, 1.0))
-        self.goal[env_ids,:] = goal_pose[env_ids,:3].clone() # destination to arrive
-        self.init_dist[env_ids] = torch.norm(self.target_pos[env_ids,:] - self.goal[env_ids,:], dim = 1)
-
-        marker_locations = self.goal
-        marker_orientations = torch.tensor([1, 0, 0, 0],dtype=torch.float32).repeat(self.num_envs,1).to(self.device)  
-        marker_indices = torch.zeros((self.num_envs,), dtype=torch.int32)  
-        self.target_marker.visualize(translations = marker_locations, orientations = marker_orientations, marker_indices = marker_indices)
     
-def _define_markers() -> VisualizationMarkers:
-    """Define markers to visualize the target position."""
-    marker_cfg = VisualizationMarkersCfg(
-        prim_path="/Visuals/TargetMarkers",
-        markers={
-            "target": sim_utils.SphereCfg(  
-                radius=0.05,  
-                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)), 
-            ),
-        },
-    )
-    return VisualizationMarkers(marker_cfg)
