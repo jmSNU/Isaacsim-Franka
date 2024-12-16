@@ -26,10 +26,13 @@ from omni.isaac.lab.scene import InteractiveScene
 from omni.isaac.lab.sim import SimulationContext
 from omni.isaac.lab.utils.noise import NoiseModel
 from omni.isaac.lab.utils.timer import Timer
+from dataclasses import MISSING
+
 
 from .common import VecEnvObs, VecEnvStepReturn
 from .direct_rl_env_cfg import DirectRLEnvCfg
 from .ui import ViewportCameraController
+from .utils.spaces import sample_space, spec_to_gym_space
 
 
 class DirectRLEnv(gym.Env):
@@ -486,26 +489,39 @@ class DirectRLEnv(gym.Env):
 
     def _configure_gym_env_spaces(self):
         """Configure the action and observation spaces for the Gym environment."""
-        # observation space (unbounded since we don't impose any limits)
-        self.num_actions = self.cfg.num_actions
-        self.num_observations = self.cfg.num_observations
-        self.num_states = self.cfg.num_states
+        # show deprecation message and overwrite configuration
+        if self.cfg.num_actions is not None:
+            omni.log.warn("DirectRLEnvCfg.num_actions is deprecated. Use DirectRLEnvCfg.action_space instead.")
+            if isinstance(self.cfg.action_space, type(MISSING)):
+                self.cfg.action_space = self.cfg.num_actions
+        if self.cfg.num_observations is not None:
+            omni.log.warn(
+                "DirectRLEnvCfg.num_observations is deprecated. Use DirectRLEnvCfg.observation_space instead."
+            )
+            if isinstance(self.cfg.observation_space, type(MISSING)):
+                self.cfg.observation_space = self.cfg.num_observations
+        if self.cfg.num_states is not None:
+            omni.log.warn("DirectRLEnvCfg.num_states is deprecated. Use DirectRLEnvCfg.state_space instead.")
+            if isinstance(self.cfg.state_space, type(MISSING)):
+                self.cfg.state_space = self.cfg.num_states
 
         # set up spaces
         self.single_observation_space = gym.spaces.Dict()
-        self.single_observation_space["policy"] = gym.spaces.Box(
-            low=-np.inf, high=np.inf, shape=(self.num_observations,)
-        )
-        self.single_action_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(self.num_actions,))
+        self.single_observation_space["policy"] = spec_to_gym_space(self.cfg.observation_space)
+        self.single_action_space = spec_to_gym_space(self.cfg.action_space)
 
         # batch the spaces for vectorized environments
         self.observation_space = gym.vector.utils.batch_space(self.single_observation_space["policy"], self.num_envs)
         self.action_space = gym.vector.utils.batch_space(self.single_action_space, self.num_envs)
 
         # optional state space for asymmetric actor-critic architectures
-        if self.num_states > 0:
-            self.single_observation_space["critic"] = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(self.num_states,))
+        self.state_space = None
+        if self.cfg.state_space:
+            self.single_observation_space["critic"] = spec_to_gym_space(self.cfg.state_space)
             self.state_space = gym.vector.utils.batch_space(self.single_observation_space["critic"], self.num_envs)
+
+        # instantiate actions (needed for tasks for which the observations computation is dependent on the actions)
+        self.actions = sample_space(self.single_action_space, self.sim.device, batch_size=self.num_envs, fill_value=0)
 
     def _reset_idx(self, env_ids: Sequence[int]):
         """Reset environments based on specified indices.
