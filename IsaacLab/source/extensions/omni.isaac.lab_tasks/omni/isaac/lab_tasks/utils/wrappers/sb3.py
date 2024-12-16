@@ -286,17 +286,20 @@ class Sb3VecEnvWrapper(VecEnv):
     """
 
     def _process_obs(self, obs_dict: torch.Tensor | dict[str, torch.Tensor]) -> np.ndarray | dict[str, np.ndarray]:
-        """Convert observations into NumPy data type."""
-        # Sb3 doesn't support asymmetric observation spaces, so we only use "policy"
+        """Convert observations into NumPy data type with support for image inputs."""
         obs = obs_dict["policy"]
-        # note: ManagerBasedRLEnv uses torch backend (by default).
-        if isinstance(obs, dict):
+
+        if isinstance(obs, torch.Tensor):
+            obs = obs.detach().cpu().numpy()
+        elif isinstance(obs, dict):
             for key, value in obs.items():
                 obs[key] = value.detach().cpu().numpy()
-        elif isinstance(obs, torch.Tensor):
-            obs = obs.detach().cpu().numpy()
         else:
             raise NotImplementedError(f"Unsupported data type: {type(obs)}")
+
+        # Handle image inputs (assume image is part of the observation)
+        if len(obs.shape) == 4:  # Batch of images, shape: (N, H, W, C)
+            obs = obs / 255.0  # Normalize pixel values to [0, 1]
         return obs
 
     def _process_extras(
