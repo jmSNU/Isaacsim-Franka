@@ -9,6 +9,10 @@ import torch
 from typing import Dict, Literal
 
 from omni.isaac.lab.utils import configclass
+import gymnasium as gym
+from typing import Dict, Literal, TypeVar
+
+from omni.isaac.lab.utils import configclass
 
 ##
 # Configuration.
@@ -61,6 +65,7 @@ class ViewerCfg:
 ##
 # Types.
 ##
+SpaceType = TypeVar("SpaceType", gym.spaces.Space, int, set, tuple, list, dict)
 
 VecEnvObs = Dict[str, torch.Tensor | Dict[str, torch.Tensor]]
 """Observation returned by the environment.
