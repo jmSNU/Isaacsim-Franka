@@ -30,9 +30,15 @@ class FrankaBaseEnvCfg(DirectRLEnvCfg):
     episode_length_s = 10.0
     action_scale = 1.0
     num_actions = 7+1 # (x, y, z, qw, qx, qy, qz) + gripper
-    num_observations = 64*64*3 # rgb image
+    num_observations = [3, 64, 64] # rgb image
     enable_obstacle = False
     table_size = (0.7, 0.7, 1.0)
+
+    # observation_space = Box(low=0, high=255, shape=(3, 64, 64), dtype=np.uint8)
+    # action_space = Box(
+    #     low = np.array([-0.1,-0.2,-0.2, 0.99706439, -0.04543723, -0.04163555, -0.04543723, -1.0]),
+    #     high = np.array([0.2,0.2,0.2, 0.9972, 0.0416, 0.0454, 0.0416, 1.0]) # qe, qx, qy,qz
+    # )
 
     # ground plane
     terrain = TerrainImporterCfg(
@@ -139,10 +145,10 @@ class FrankaBaseEnvCfg(DirectRLEnvCfg):
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=16, env_spacing=4, replicate_physics=True)
 
     # Domain Randomization
-    observation_noise_model: NoiseModelWithAdditiveBiasCfg = NoiseModelWithAdditiveBiasCfg(
-      noise_cfg=GaussianNoiseCfg(mean=0.0, std=0.002, operation="add"),
-      bias_noise_cfg=GaussianNoiseCfg(mean=0.0, std=0.0001, operation="abs"),
-    )
+    # observation_noise_model: NoiseModelWithAdditiveBiasCfg = NoiseModelWithAdditiveBiasCfg(
+    #   noise_cfg=GaussianNoiseCfg(mean=0.0, std=0.002, operation="add"),
+    #   bias_noise_cfg=GaussianNoiseCfg(mean=0.0, std=0.0001, operation="abs"),
+    # )
 
     action_noise_model: NoiseModelWithAdditiveBiasCfg = NoiseModelWithAdditiveBiasCfg(
       noise_cfg=GaussianNoiseCfg(mean=0.0, std=0.05, operation="add"),
@@ -205,7 +211,7 @@ class FrankaBaseEnv(DirectRLEnv):
     def __init__(self, cfg: FrankaBaseEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
         self.action_scale = self.cfg.action_scale
-        self.observation_space = Box(low=0, high=255, shape = (cfg.num_observations,), dtype=np.uint8)
+        
         self.dt = self.cfg.sim.dt * self.cfg.decimation
 
         # Body and Joint ids querying
@@ -311,7 +317,7 @@ class FrankaBaseEnv(DirectRLEnv):
 
         # clipping ee position
         low = self.table_pos + torch.tensor(np.array([-0.2, -0.3, 0.5]), device = self.device)
-        high = self.table_pos + torch.tensor(np.array([0.2, 0.3, 1.0]), device = self.device)
+        high = self.table_pos + torch.tensor(np.array([0.2, 0.3, 1.5]), device = self.device)
         dummy_pos = torch.zeros(self.num_envs, 3, device = self.device, dtype = torch.float32)
 
         ee_pose_w = self.robot.data.body_state_w[:, self.ee_idx, 0:7]
@@ -376,10 +382,10 @@ class FrankaBaseEnv(DirectRLEnv):
 
     def _get_observations(self) -> dict:
         img = self.camera.data.output['rgb'] #(num_envs, H, W, 4)
-        img = img[:, :, :, :-1] 
+        img = img[:,:,:,:-1]
         for env_id in range(self.num_envs):
             cv2.imwrite(f"obs/obs_{env_id}.png", img[env_id,:,:,:].cpu().numpy())
-        img = img.reshape(self.num_envs,-1).float()
+        img = torch.permute(img,(0, 3, 1, 2))
         observations = {"policy": img}
         return observations
 
@@ -413,7 +419,7 @@ class FrankaBaseEnv(DirectRLEnv):
         self.robot.set_joint_position_target(joint_pos, env_ids=env_ids)
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
 
-        spawn_pos = self.update_goal_or_target(offset = self.table_pos.cpu())
+        spawn_pos = self.update_goal_or_target(offset = self.table_pos.cpu(), which = "target", dz_range=(0.5, 0.5))
         self.target.write_root_state_to_sim(spawn_pos[env_ids,:], env_ids = env_ids)
         self.target_init_pos = spawn_pos[:,0:3].clone()
 
@@ -424,14 +430,9 @@ class FrankaBaseEnv(DirectRLEnv):
         self.target_pos[env_ids,:] = self.target.data.root_state_w[env_ids,:3].clone()
         self.init_tcp[env_ids,:] = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1)[env_ids,:] # (N, 3)
 
-        goal_pose = self.update_goal_or_target(target_pos=self.target_pos.clone(), dz_range= (0, 0.3))
+        goal_pose = self.update_goal_or_target(offset=self.target_pos.clone(), which = "goal", dz_range= (0, 0.3))
         self.goal[env_ids,:] = goal_pose[env_ids,:3].clone() # destination to arrive
         self.init_dist[env_ids] = torch.norm(self.target_pos[env_ids,:] - self.goal[env_ids,:], dim = 1)
-
-        marker_locations = self.goal
-        marker_orientations = torch.tensor([1, 0, 0, 0],dtype=torch.float32).repeat(self.num_envs,1).to(self.device)  
-        marker_indices = torch.zeros((self.num_envs,), dtype=torch.int32)  
-        self.target_marker.visualize(translations = marker_locations, orientations = marker_orientations, marker_indices = marker_indices)
 
     """ Reference : https://github.com/Farama-Foundation/Metaworld/blob/cca35cff0ec62f1a18b11440de6b09e2d10a1380/metaworld/envs/mujoco/sawyer_xyz/sawyer_xyz_env.py#L699 """
     def _gripper_grasp_reward(self, action, obj_pos, obj_radius, pad_success_thresh, obj_reach_radius, xz_thresh, desired_gripper_effort = 1.0, high_density = False, medium_density = False):
@@ -469,7 +470,7 @@ class FrankaBaseEnv(DirectRLEnv):
             sigmoid="long_tail"
         )
         
-        gripper_closed = torch.where(action[:, -1] < 0, desired_gripper_effort, 0.0)  # 음수면 닫힘, 양수면 열림
+        gripper_closed = torch.where(action[:, -1] < 0, desired_gripper_effort, 0.0)  
         gripper_closed = gripper_closed / desired_gripper_effort
         caging = hamacher_product(caging_y, caging_xz)
         gripping = torch.where(caging>0.97, gripper_closed, 0.0) 
@@ -494,8 +495,8 @@ class FrankaBaseEnv(DirectRLEnv):
     def update_target_pos(self):
         self.target_pos = self.target.data.root_state_w[:,:3].clone()
 
-    def update_goal_or_target(self, offset=None, target_pos=None, dz_range=(0.5, 0.5)):
-        if target_pos is None:
+    def update_goal_or_target(self, offset, which = "target", dz_range=(0.5, 0.5)):
+        if which == "target" :
             # Generate new random target positions
             x = torch.rand(self.num_envs, 1) * (self.cfg.table_size[0] / 2) - (self.cfg.table_size[0] / 4) + 0.08
             y = torch.rand(self.num_envs, 1) * (self.cfg.table_size[1] / 2) - (self.cfg.table_size[1] / 4)
@@ -504,22 +505,22 @@ class FrankaBaseEnv(DirectRLEnv):
             translational_velocity = torch.zeros((self.num_envs, 3))
             rotational_velocity = torch.zeros((self.num_envs, 3))
 
-            target_pos = torch.cat((x, y, z), dim=1) + (offset if offset is not None else 0)
+            target_pos = torch.cat((x, y, z), dim=1) + offset
             combined_tensor = torch.cat((target_pos, quaternion, translational_velocity, rotational_velocity), dim=1)
             return combined_tensor.to(self.device)
         else:
-            dx = (torch.rand(self.num_envs, 1) * 0.05 + 0.05) * (torch.randint(0, 2, (self.num_envs, 1)) * 2 - 1)
+            dx = torch.rand(self.num_envs, 1) * 0.15 + 0.05
             dy = (torch.rand(self.num_envs, 1) * 0.1 + 0.1) * (torch.randint(0, 2, (self.num_envs, 1)) * 2 - 1)
             dz = torch.rand(self.num_envs, 1) * (dz_range[1] - dz_range[0]) + dz_range[0]
 
-            x = target_pos[:, 0].unsqueeze(1) + dx.to(self.device)
-            y = target_pos[:, 1].unsqueeze(1) + dy.to(self.device)
-            z = target_pos[:, 2].unsqueeze(1) + dz.to(self.device)
+            x = offset[:, 0].unsqueeze(1) + dx.to(self.device)
+            y = offset[:, 1].unsqueeze(1) + dy.to(self.device)
+            z = offset[:, 2].unsqueeze(1) + dz.to(self.device)
 
             output = torch.cat((x, y, z), dim=1)
-            output[:, 0] = torch.clamp(output[:, 0], self.table_pos[:, 0] - self.cfg.table_size[0], self.table_pos[:, 0] + self.cfg.table_size[0])
-            output[:, 1] = torch.clamp(output[:, 1], self.table_pos[:, 1] - self.cfg.table_size[1], self.table_pos[:, 1] + self.cfg.table_size[1])
-            output[:, 2] = torch.clamp(output[:, 2], 1.0, 2.0)
+            output[:, 0] = torch.clamp(output[:, 0], self.table_pos[:, 0] - self.cfg.table_size[0]/2, self.table_pos[:, 0] + self.cfg.table_size[0]/2)
+            output[:, 1] = torch.clamp(output[:, 1], self.table_pos[:, 1] - self.cfg.table_size[1]/2, self.table_pos[:, 1] + self.cfg.table_size[1]/2)
+            output[:, 2] = torch.clamp(output[:, 2], 1.0, 1.5)
             return output
     
     def _define_markers(self) -> VisualizationMarkers:
