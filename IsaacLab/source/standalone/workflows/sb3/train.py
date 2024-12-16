@@ -44,6 +44,8 @@ simulation_app = app_launcher.app
 """Rest everything follows."""
 
 import gymnasium as gym
+from gymnasium.spaces.box import Box
+
 import numpy as np
 import os
 from datetime import datetime
