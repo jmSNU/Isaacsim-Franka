@@ -41,11 +41,3 @@ class FrankaReachEnv(FrankaBaseEnv):
     def _reset_idx(self, env_ids: Sequence[int] | None):
         super()._reset_idx(env_ids)
 
-        goal_pose = self.update_goal_or_target(offset=self.init_tcp.clone(), which = "goal", dz_range= (-0.5, 0.1))
-        self.goal[env_ids,:] = goal_pose[env_ids,:3].clone() # destination to arrive
-        
-        marker_locations = self.goal
-        marker_orientations = torch.tensor([1, 0, 0, 0],dtype=torch.float32).repeat(self.num_envs,1).to(self.device)  
-        marker_indices = torch.zeros((self.num_envs,), dtype=torch.int32)  
-        self.target_marker.visualize(translations = marker_locations, orientations = marker_orientations, marker_indices = marker_indices)
-         
