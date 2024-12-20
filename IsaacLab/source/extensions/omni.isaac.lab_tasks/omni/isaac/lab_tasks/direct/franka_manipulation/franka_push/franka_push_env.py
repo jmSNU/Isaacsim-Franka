@@ -75,8 +75,8 @@ class FrankaPushEnv(FrankaBaseEnv):
         self.goal[env_ids,:] = goal_pose[env_ids,:3].clone() # destination to arrive
         self.init_dist[env_ids] = torch.norm(self.target_pos[env_ids,:] - self.goal[env_ids,:], dim = 1)
 
-        marker_locations = self.goal
-        marker_orientations = torch.tensor([1, 0, 0, 0],dtype=torch.float32).repeat(self.num_envs,1).to(self.device)  
-        marker_indices = torch.zeros((self.num_envs,), dtype=torch.int32)  
+        marker_locations = self.goal[env_ids,:]
+        marker_orientations = torch.tensor([1, 0, 0, 0],dtype=torch.float32).repeat(len(env_ids),1).to(self.device)  
+        marker_indices = torch.zeros((env_ids,), dtype=torch.int32)  
         self.target_marker.visualize(translations = marker_locations, orientations = marker_orientations, marker_indices = marker_indices)
 
