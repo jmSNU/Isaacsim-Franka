@@ -438,8 +438,14 @@ class FrankaBaseEnv(DirectRLEnv):
                 goal_pose = self.update_goal_or_target(offset=self.target_pos.clone(), which = "goal", dz_range= (0, 0.3))
                 tcp_to_goal[i] = torch.norm(goal_pose[env_id,:3] - self.init_tcp[env_id,:])
                 self.goal[env_ids,:] = goal_pose[env_ids,:3].clone() # destination to arrive
-                
+        
         self.init_dist[env_ids] = torch.norm(self.target_pos[env_ids,:] - self.goal[env_ids,:], dim = 1)
+
+        marker_locations = self.goal[env_ids,:]
+        marker_orientations = torch.tensor([1, 0, 0, 0],dtype=torch.float32).repeat(len(env_ids),1).to(self.device)  
+        marker_indices = torch.zeros((env_ids,), dtype=torch.int32)  
+        self.target_marker.visualize(translations = marker_locations, orientations = marker_orientations, marker_indices = marker_indices)
+
 
     """ Reference : https://github.com/Farama-Foundation/Metaworld/blob/cca35cff0ec62f1a18b11440de6b09e2d10a1380/metaworld/envs/mujoco/sawyer_xyz/sawyer_xyz_env.py#L699 """
     def _gripper_grasp_reward(self, action, obj_pos, obj_radius, pad_success_thresh, obj_reach_radius, xz_thresh, desired_gripper_effort = 1.0, high_density = False, medium_density = False):
