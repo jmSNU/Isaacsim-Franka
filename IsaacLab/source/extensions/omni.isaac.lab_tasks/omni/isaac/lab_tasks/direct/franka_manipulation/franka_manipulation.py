@@ -34,12 +34,6 @@ class FrankaBaseEnvCfg(DirectRLEnvCfg):
     enable_obstacle = False
     table_size = (0.7, 0.7, 1.0)
 
-    # observation_space = Box(low=0, high=255, shape=(3, 64, 64), dtype=np.uint8)
-    # action_space = Box(
-    #     low = np.array([-0.1,-0.2,-0.2, 0.99706439, -0.04543723, -0.04163555, -0.04543723, -1.0]),
-    #     high = np.array([0.2,0.2,0.2, 0.9972, 0.0416, 0.0454, 0.0416, 1.0]) # qe, qx, qy,qz
-    # )
-
     # ground plane
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
@@ -122,7 +116,7 @@ class FrankaBaseEnvCfg(DirectRLEnvCfg):
     camera = CameraCfg(
         prim_path="/World/envs/env_.*/Robot/camera",
         offset=CameraCfg.OffsetCfg(
-            pos=(2.7, 0.0, 1.2), 
+            pos=(2.7, 0.0, 1.1), 
             rot=(0.0, -0.174, 0.0, 0.985), 
             convention="world"
         ),  
@@ -145,11 +139,6 @@ class FrankaBaseEnvCfg(DirectRLEnvCfg):
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=16, env_spacing=4, replicate_physics=True)
 
     # Domain Randomization
-    # observation_noise_model: NoiseModelWithAdditiveBiasCfg = NoiseModelWithAdditiveBiasCfg(
-    #   noise_cfg=GaussianNoiseCfg(mean=0.0, std=0.002, operation="add"),
-    #   bias_noise_cfg=GaussianNoiseCfg(mean=0.0, std=0.0001, operation="abs"),
-    # )
-
     action_noise_model: NoiseModelWithAdditiveBiasCfg = NoiseModelWithAdditiveBiasCfg(
       noise_cfg=GaussianNoiseCfg(mean=0.0, std=0.05, operation="add"),
       bias_noise_cfg=GaussianNoiseCfg(mean=0.0, std=0.015, operation="abs"),
@@ -434,18 +423,16 @@ class FrankaBaseEnv(DirectRLEnv):
         tcp_to_goal = torch.norm(goal_pose[env_ids,:3] - self.init_tcp[env_ids,:], dim = 1)
 
         for i, env_id in enumerate(env_ids):
-            while tcp_to_goal[i]<0.15:
+            while tcp_to_goal[i]<0.3:
                 goal_pose = self.update_goal_or_target(offset=self.target_pos.clone(), which = "goal", dz_range= (0, 0.3))
                 tcp_to_goal[i] = torch.norm(goal_pose[env_id,:3] - self.init_tcp[env_id,:])
-                self.goal[env_ids,:] = goal_pose[env_ids,:3].clone() # destination to arrive
-        
+            self.goal[env_id,:] = goal_pose[env_id,:3].clone() # destination to arrive
         self.init_dist[env_ids] = torch.norm(self.target_pos[env_ids,:] - self.goal[env_ids,:], dim = 1)
 
-        marker_locations = self.goal[env_ids,:]
-        marker_orientations = torch.tensor([1, 0, 0, 0],dtype=torch.float32).repeat(len(env_ids),1).to(self.device)  
-        marker_indices = torch.zeros((env_ids,), dtype=torch.int32)  
+        marker_locations = self.goal
+        marker_orientations = torch.tensor([1, 0, 0, 0],dtype=torch.float32).repeat(self.num_envs,1).to(self.device)  
+        marker_indices = torch.zeros((self.num_envs,), dtype=torch.int32)  
         self.target_marker.visualize(translations = marker_locations, orientations = marker_orientations, marker_indices = marker_indices)
-
 
     """ Reference : https://github.com/Farama-Foundation/Metaworld/blob/cca35cff0ec62f1a18b11440de6b09e2d10a1380/metaworld/envs/mujoco/sawyer_xyz/sawyer_xyz_env.py#L699 """
     def _gripper_grasp_reward(self, action, obj_pos, obj_radius, pad_success_thresh, obj_reach_radius, xz_thresh, desired_gripper_effort = 1.0, high_density = False, medium_density = False):
