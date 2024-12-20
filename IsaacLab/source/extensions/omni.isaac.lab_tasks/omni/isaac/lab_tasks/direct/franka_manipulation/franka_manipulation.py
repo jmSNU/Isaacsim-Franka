@@ -423,15 +423,22 @@ class FrankaBaseEnv(DirectRLEnv):
         self.target.write_root_state_to_sim(spawn_pos[env_ids,:], env_ids = env_ids)
         self.target_init_pos = spawn_pos[:,0:3].clone()
 
-        if self.cfg.enable_obstacle:
-            obstacle_pos = spawn_pos + torch.tensor([0.0,0.15,0.1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0], device = self.device)
-            self.obstacle.write_root_state_to_sim(obstacle_pos[env_ids,:], env_ids)
-
         self.target_pos[env_ids,:] = self.target.data.root_state_w[env_ids,:3].clone()
         self.init_tcp[env_ids,:] = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1)[env_ids,:] # (N, 3)
 
+        if self.cfg.enable_obstacle:
+            obstacle_pos = spawn_pos + torch.tensor([0.0,0.15,0.1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0], device = self.device)
+            self.obstacle.write_root_state_to_sim(obstacle_pos[env_ids,:], env_ids)
+        
         goal_pose = self.update_goal_or_target(offset=self.target_pos.clone(), which = "goal", dz_range= (0, 0.3))
-        self.goal[env_ids,:] = goal_pose[env_ids,:3].clone() # destination to arrive
+        tcp_to_goal = torch.norm(goal_pose[env_ids,:3] - self.init_tcp[env_ids,:], dim = 1)
+
+        for i, env_id in enumerate(env_ids):
+            while tcp_to_goal[i]<0.15:
+                goal_pose = self.update_goal_or_target(offset=self.target_pos.clone(), which = "goal", dz_range= (0, 0.3))
+                tcp_to_goal[i] = torch.norm(goal_pose[env_id,:3] - self.init_tcp[env_id,:])
+                self.goal[env_ids,:] = goal_pose[env_ids,:3].clone() # destination to arrive
+                
         self.init_dist[env_ids] = torch.norm(self.target_pos[env_ids,:] - self.goal[env_ids,:], dim = 1)
 
     """ Reference : https://github.com/Farama-Foundation/Metaworld/blob/cca35cff0ec62f1a18b11440de6b09e2d10a1380/metaworld/envs/mujoco/sawyer_xyz/sawyer_xyz_env.py#L699 """
