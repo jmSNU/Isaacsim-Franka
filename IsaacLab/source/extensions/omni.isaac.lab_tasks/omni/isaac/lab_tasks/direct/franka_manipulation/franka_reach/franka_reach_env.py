@@ -17,6 +17,7 @@ class FrankaReachEnv(FrankaBaseEnv):
     def _get_rewards(self) -> torch.Tensor:
         tcp = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1)
         tcp_to_goal = torch.norm(tcp - self.goal, dim = 1)
+
         in_place_margin = torch.norm(self.init_tcp - self.goal, dim = 1)
         in_place = tolerance(
             tcp_to_goal,
