@@ -30,7 +30,7 @@ class FrankaBaseEnvCfg(DirectRLEnvCfg):
     episode_length_s = 5.0
     action_scale = 0.1
     num_actions = 7+1 # (x, y, z, qw, qx, qy, qz) + gripper
-    num_observations = [3, 64, 64] # rgb image
+    num_observations = [3, 128, 128] # rgb image
     enable_obstacle = False
     table_size = (0.7, 0.7, 1.0)
 
@@ -127,7 +127,7 @@ class FrankaBaseEnvCfg(DirectRLEnvCfg):
             clipping_range=(0.1, 1.0e5), 
         ),
         data_types=["rgb"], 
-        width=64, height=64,  
+        width=num_observations[1], height=num_observations[2],  
     )
 
     sensor = ContactSensorCfg(
@@ -218,10 +218,10 @@ class FrankaBaseEnv(DirectRLEnv):
             self.ee_jacobi_idx = self.robot_entity_cfg.body_ids[0]
 
         self.ee_idx = self.robot_entity_cfg.body_ids[0] # 'panda_hand'
-        self.finger_idx = self.body_ids[-2:] # 'panda_leftfinger', 'panda_rightfinger'
-        self.pos_joint_ids = self.joint_ids[:3]  # 'panda_joint1', 'panda_joint2', 'panda_joint3'
-        self.rot_joint_ids = self.joint_ids[3:6] # 'panda_joint4', 'panda_joint5', 'panda_joint7'
-        self.gripper_joint_ids = self.joint_ids[-2:] 
+        self.finger_idx, _ = self.robot.find_bodies(['panda_leftfinger', 'panda_rightfinger'], preserve_order = True)
+        self.pos_joint_ids, _ = self.robot.find_joints(['panda_joint1', 'panda_joint2', 'panda_joint3'], preserve_order = True)
+        self.rot_joint_ids, _ = self.robot.find_joints(['panda_joint4', 'panda_joint5', 'panda_joint6'], preserve_order = True)
+        self.gripper_joint_ids, _ = self.robot.find_joints(['panda_finger_joint1', 'panda_finger_joint2'], preserve_order = True)
         self.undesired_contact_body_ids, _ = self.robot.find_bodies(['panda_link0', 'panda_link1', 'panda_link2', 'panda_link3', 'panda_link4', 'panda_link5', 'panda_link6', 'panda_link7'])
         self.gripper_open_position = 0.0
         self.gripper_close_position = 20.0
@@ -410,7 +410,7 @@ class FrankaBaseEnv(DirectRLEnv):
         self.robot.set_joint_position_target(joint_pos, env_ids=env_ids)
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
 
-        spawn_pos = self.update_goal_or_target(offset = self.table_pos.cpu(), which = "target", dz_range=(0.5, 0.5))
+        spawn_pos = self.update_goal_or_target(offset = self.table_pos.clone().cpu(), which = "target")
         self.target.write_root_state_to_sim(spawn_pos[env_ids,:], env_ids = env_ids)
         self.target_init_pos = spawn_pos[:,0:3].clone()
 
@@ -421,15 +421,15 @@ class FrankaBaseEnv(DirectRLEnv):
             obstacle_pos = spawn_pos + torch.tensor([0.0,0.15,0.1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0], device = self.device)
             self.obstacle.write_root_state_to_sim(obstacle_pos[env_ids,:], env_ids)
         
-        tcp_to_goal = torch.zeros((env_ids,1))
-        goal_to_target = torch.zeros((env_ids,1))
+        tcp_to_goal = torch.zeros((len(env_ids),))
+        goal_to_target = torch.zeros((len(env_ids),))
 
         for i, env_id in enumerate(env_ids):
             while True:
                 goal_pose = self.update_goal_or_target(offset = self.on_table_pos, which = "goal",dx_range = (0.1, 0.2), dy_range = (-0.1, 0.1), dz_range = (0.05, 0.3))
                 tcp_to_goal[i] = torch.norm(goal_pose[env_id,:3] - self.init_tcp[env_id,:])
-                goal_to_target[i] = torch.norm(self.target_pos[env_ids,:] - goal_pose[env_ids,:3], dim = 1)
-                if tcp_to_goal[i] > 0.15 and goal_to_target > 0.15:
+                goal_to_target[i] = torch.norm(self.target_pos[env_id,:] - goal_pose[env_id,:3])
+                if tcp_to_goal[i] > 0.15 and goal_to_target[i] > 0.15:
                     break
             self.goal[env_id,:] = goal_pose[env_id,:3].clone() # destination to arrive        
         self.init_dist[env_ids] = torch.norm(self.target_pos[env_ids,:] - self.goal[env_ids,:], dim = 1)
@@ -563,4 +563,3 @@ class FrankaBaseEnv(DirectRLEnv):
             },
         )
         return VisualizationMarkers(marker_cfg)
-
