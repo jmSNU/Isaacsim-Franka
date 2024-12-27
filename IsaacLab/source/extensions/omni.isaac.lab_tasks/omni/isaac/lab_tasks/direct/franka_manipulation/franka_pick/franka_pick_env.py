@@ -68,6 +68,7 @@ class FrankaPickEnv(FrankaBaseEnv):
             tcp_obj_dist_xz,
             bounds = (0, x_z_success_margin),
             margin = tcp_obj_xz_margin,
+            sigmoid = "long_tail"
         )
 
         gripper_closed = self.actions[:, -1] <= 0
