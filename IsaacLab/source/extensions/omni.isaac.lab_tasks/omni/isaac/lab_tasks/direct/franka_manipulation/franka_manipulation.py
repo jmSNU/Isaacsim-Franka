@@ -419,14 +419,18 @@ class FrankaBaseEnv(DirectRLEnv):
             obstacle_pos = spawn_pos + torch.tensor([0.0,0.15,0.1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0], device = self.device)
             self.obstacle.write_root_state_to_sim(obstacle_pos[env_ids,:], env_ids)
         
-        goal_pose = self.update_goal_or_target(offset=self.target_pos.clone(), which = "goal", dz_range= (0, 0.3))
+        goal_pose = self.update_goal_or_target(offset=self.target_pos.clone(), which = "goal", dz_range= (0.1, 0.3))
         tcp_to_goal = torch.norm(goal_pose[env_ids,:3] - self.init_tcp[env_ids,:], dim = 1)
 
         for i, env_id in enumerate(env_ids):
-            while tcp_to_goal[i]<0.3:
-                goal_pose = self.update_goal_or_target(offset=self.target_pos.clone(), which = "goal", dz_range= (0, 0.3))
+            while True:
+                goal_pose = self.update_goal_or_target(offset=self.target_pos.clone(), which = "goal", dz_range= (0.1, 0.3))
                 tcp_to_goal[i] = torch.norm(goal_pose[env_id,:3] - self.init_tcp[env_id,:])
+                if tcp_to_goal[i] > 0.15:
+                    break
             self.goal[env_id,:] = goal_pose[env_id,:3].clone() # destination to arrive
+        
+        assert torch.all(torch.norm(self.goal[env_ids,:] - self.init_tcp[env_ids,:], dim = 1)>0.1)
         self.init_dist[env_ids] = torch.norm(self.target_pos[env_ids,:] - self.goal[env_ids,:], dim = 1)
 
         marker_locations = self.goal
@@ -509,8 +513,8 @@ class FrankaBaseEnv(DirectRLEnv):
             combined_tensor = torch.cat((target_pos, quaternion, translational_velocity, rotational_velocity), dim=1)
             return combined_tensor.to(self.device)
         else:
-            dx = torch.rand(self.num_envs, 1) * 0.15 + 0.05
-            dy = (torch.rand(self.num_envs, 1) * 0.1 + 0.1) * (torch.randint(0, 2, (self.num_envs, 1)) * 2 - 1)
+            dx = torch.rand(self.num_envs, 1) * 0.15
+            dy = (torch.rand(self.num_envs, 1) * 0.15 + 0.15) * (torch.randint(0, 2, (self.num_envs, 1)) * 2 - 1)
             dz = torch.rand(self.num_envs, 1) * (dz_range[1] - dz_range[0]) + dz_range[0]
 
             x = offset[:, 0].unsqueeze(1) + dx.to(self.device)
@@ -520,7 +524,7 @@ class FrankaBaseEnv(DirectRLEnv):
             output = torch.cat((x, y, z), dim=1)
             output[:, 0] = torch.clamp(output[:, 0], self.table_pos[:, 0] - self.cfg.table_size[0]/2, self.table_pos[:, 0] + self.cfg.table_size[0]/2)
             output[:, 1] = torch.clamp(output[:, 1], self.table_pos[:, 1] - self.cfg.table_size[1]/2, self.table_pos[:, 1] + self.cfg.table_size[1]/2)
-            output[:, 2] = torch.clamp(output[:, 2], 1.0, 1.5)
+            output[:, 2] = torch.clamp(output[:, 2], 1.0, 2.0)
             return output
     
     def _define_markers(self) -> VisualizationMarkers:
