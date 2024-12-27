@@ -26,9 +26,9 @@ from omni.isaac.lab.markers import VisualizationMarkers, VisualizationMarkersCfg
 
 @configclass
 class FrankaBaseEnvCfg(DirectRLEnvCfg):
-    decimation = 2
-    episode_length_s = 10.0
-    action_scale = 1.0
+    decimation = 4
+    episode_length_s = 5.0
+    action_scale = 0.1
     num_actions = 7+1 # (x, y, z, qw, qx, qy, qz) + gripper
     num_observations = [3, 64, 64] # rgb image
     enable_obstacle = False
@@ -254,6 +254,8 @@ class FrankaBaseEnv(DirectRLEnv):
         self.diff_ik_controller = DifferentialIKController(ik_cfg, num_envs=cfg.scene.num_envs, device=self.scene["robot"].device)
         self.init_tcp = torch.zeros((self.num_envs, 3), device = self.device, dtype = torch.float32)
         self.table_pos = self.table.data.root_state_w[:,:3].clone()
+        self.on_table_pos = self.table_pos.clone().cpu()
+        self.on_table_pos[:, 2:3] += torch.ones((self.num_envs,1))*0.5
         self.target_pos = self.table_pos.clone()
 
         self.goal = self.table_pos.clone()
@@ -305,8 +307,8 @@ class FrankaBaseEnv(DirectRLEnv):
         quat_high = quat_from_euler_xyz(roll_range[1], pitch_range[1], yaw_range[1])
 
         # clipping ee position
-        low = self.table_pos + torch.tensor(np.array([-0.2, -0.3, 0.5]), device = self.device)
-        high = self.table_pos + torch.tensor(np.array([0.2, 0.3, 1.5]), device = self.device)
+        low = self.table_pos + torch.tensor(np.array([-0.2, -0.35, 0.5]), device = self.device)
+        high = self.table_pos + torch.tensor(np.array([0.35, 0.35, 1.5]), device = self.device)
         dummy_pos = torch.zeros(self.num_envs, 3, device = self.device, dtype = torch.float32)
 
         ee_pose_w = self.robot.data.body_state_w[:, self.ee_idx, 0:7]
@@ -419,18 +421,17 @@ class FrankaBaseEnv(DirectRLEnv):
             obstacle_pos = spawn_pos + torch.tensor([0.0,0.15,0.1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0], device = self.device)
             self.obstacle.write_root_state_to_sim(obstacle_pos[env_ids,:], env_ids)
         
-        goal_pose = self.update_goal_or_target(offset=self.target_pos.clone(), which = "goal", dz_range= (0.1, 0.3))
-        tcp_to_goal = torch.norm(goal_pose[env_ids,:3] - self.init_tcp[env_ids,:], dim = 1)
+        tcp_to_goal = torch.zeros((env_ids,1))
+        goal_to_target = torch.zeros((env_ids,1))
 
         for i, env_id in enumerate(env_ids):
             while True:
-                goal_pose = self.update_goal_or_target(offset=self.target_pos.clone(), which = "goal", dz_range= (0.1, 0.3))
+                goal_pose = self.update_goal_or_target(offset = self.on_table_pos, which = "goal",dx_range = (0.1, 0.2), dy_range = (-0.1, 0.1), dz_range = (0.05, 0.3))
                 tcp_to_goal[i] = torch.norm(goal_pose[env_id,:3] - self.init_tcp[env_id,:])
-                if tcp_to_goal[i] > 0.15:
+                goal_to_target[i] = torch.norm(self.target_pos[env_ids,:] - goal_pose[env_ids,:3], dim = 1)
+                if tcp_to_goal[i] > 0.15 and goal_to_target > 0.15:
                     break
-            self.goal[env_id,:] = goal_pose[env_id,:3].clone() # destination to arrive
-        
-        assert torch.all(torch.norm(self.goal[env_ids,:] - self.init_tcp[env_ids,:], dim = 1)>0.1)
+            self.goal[env_id,:] = goal_pose[env_id,:3].clone() # destination to arrive        
         self.init_dist[env_ids] = torch.norm(self.target_pos[env_ids,:] - self.goal[env_ids,:], dim = 1)
 
         marker_locations = self.goal
@@ -444,8 +445,8 @@ class FrankaBaseEnv(DirectRLEnv):
             raise ValueError("Can only be either high_density or medium_density")
         
         tcp_pos = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1) # (N, 3)
-        left_pad = self.robot.data.body_state_w[:, self.finger_idx[0], 0:3] # (N,3)
-        rigth_pad = self.robot.data.body_state_w[:, self.finger_idx[1], 0:3] # (N,3)
+        left_pad = self.robot.data.body_state_w[:, self.finger_idx[0], 0:3] # (N, 3)
+        rigth_pad = self.robot.data.body_state_w[:, self.finger_idx[1], 0:3] # (N, 3)
 
         pad_y_lr = torch.stack((left_pad[:, 1], rigth_pad[:, 1]), dim = 1) # (N, 2)
         pad_to_obj_lr = torch.abs(pad_y_lr - obj_pos[:, 1].unsqueeze(-1)) #(N, 2)
@@ -499,12 +500,17 @@ class FrankaBaseEnv(DirectRLEnv):
     def update_target_pos(self):
         self.target_pos = self.target.data.root_state_w[:,:3].clone()
 
-    def update_goal_or_target(self, offset, which = "target", dz_range=(0.5, 0.5)):
-        if which == "target" :
-            # Generate new random target positions
-            x = torch.rand(self.num_envs, 1) * (self.cfg.table_size[0] / 2) - (self.cfg.table_size[0] / 4) + 0.08
-            y = torch.rand(self.num_envs, 1) * (self.cfg.table_size[1] / 2) - (self.cfg.table_size[1] / 4)
-            z = torch.ones((self.num_envs, 1)) * dz_range[0]  # Fixed initial height
+    def update_goal_or_target(self, offset=None, which="target", dx_range=None, dy_range=None, dz_range=None):
+        if offset is None:
+            offset = torch.zeros((self.num_envs, 3), device=self.device)
+
+        if which == "target":
+            x_half = self.cfg.table_size[0]/2 - 0.05
+            y_half = self.cfg.table_size[1]/2 - 0.05
+            x = torch.rand(self.num_envs, 1) * 2*x_half - x_half
+            y = torch.rand(self.num_envs, 1) * 2*y_half - y_half
+            z = torch.ones((self.num_envs, 1)) * 0.5 
+
             quaternion = torch.tensor([0.7071, 0.0, 0.7071, 0.0]).repeat(self.num_envs, 1)
             translational_velocity = torch.zeros((self.num_envs, 3))
             rotational_velocity = torch.zeros((self.num_envs, 3))
@@ -512,16 +518,34 @@ class FrankaBaseEnv(DirectRLEnv):
             target_pos = torch.cat((x, y, z), dim=1) + offset
             combined_tensor = torch.cat((target_pos, quaternion, translational_velocity, rotational_velocity), dim=1)
             return combined_tensor.to(self.device)
+
         else:
-            dx = torch.rand(self.num_envs, 1) * 0.15
-            dy = (torch.rand(self.num_envs, 1) * 0.15 + 0.15) * (torch.randint(0, 2, (self.num_envs, 1)) * 2 - 1)
-            dz = torch.rand(self.num_envs, 1) * (dz_range[1] - dz_range[0]) + dz_range[0]
+            if dx_range is None:
+                dx = torch.rand(self.num_envs, 1) * 0.1
+            elif isinstance(dx_range, tuple):
+                dx = torch.rand(self.num_envs, 1) * (dx_range[1] - dx_range[0]) + dx_range[0]
+            else:  # Fixed value
+                dx = torch.ones(self.num_envs, 1) * dx_range
 
-            x = offset[:, 0].unsqueeze(1) + dx.to(self.device)
-            y = offset[:, 1].unsqueeze(1) + dy.to(self.device)
-            z = offset[:, 2].unsqueeze(1) + dz.to(self.device)
+            if dy_range is None:
+                dy = (torch.rand(self.num_envs, 1) * 0.15 + 0.15) * (torch.randint(0, 2, (self.num_envs, 1)) * 2 - 1)
+            elif isinstance(dy_range, tuple):
+                dy = torch.rand(self.num_envs, 1) * (dy_range[1] - dy_range[0]) + dy_range[0]
+            else:  # Fixed value
+                dy = torch.ones(self.num_envs, 1) * dy_range
 
-            output = torch.cat((x, y, z), dim=1)
+            if dz_range is None:
+                dz = torch.rand(self.num_envs, 1) * 0.1
+            elif isinstance(dz_range, tuple):
+                dz = torch.rand(self.num_envs, 1) * (dz_range[1] - dz_range[0]) + dz_range[0]
+            else:  # Fixed value
+                dz = torch.ones(self.num_envs, 1) * dz_range
+
+            x = offset[:, 0].unsqueeze(1) + dx
+            y = offset[:, 1].unsqueeze(1) + dy
+            z = offset[:, 2].unsqueeze(1) + dz
+
+            output = torch.cat((x, y, z), dim=1).to(self.device)
             output[:, 0] = torch.clamp(output[:, 0], self.table_pos[:, 0] - self.cfg.table_size[0]/2, self.table_pos[:, 0] + self.cfg.table_size[0]/2)
             output[:, 1] = torch.clamp(output[:, 1], self.table_pos[:, 1] - self.cfg.table_size[1]/2, self.table_pos[:, 1] + self.cfg.table_size[1]/2)
             output[:, 2] = torch.clamp(output[:, 2], 1.0, 2.0)
