@@ -22,7 +22,7 @@ class FrankaPickEnv(FrankaBaseEnv):
         pad_success_margin = 0.05
         x_z_success_margin = 0.005
         obj_radius = 0.015
-        tcp = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1)
+        tcp = self.tcp
         left_pad = self.robot.data.body_state_w[:, self.finger_idx[0], 0:3]
         right_pad = self.robot.data.body_state_w[:, self.finger_idx[1], 0:3]
         delta_obj_y_left_pad = left_pad[:, 1] - obj_pos[:, 1]
@@ -81,12 +81,11 @@ class FrankaPickEnv(FrankaBaseEnv):
 
 
     def _get_rewards(self) -> torch.Tensor:
-        self.update_target_pos()
-        tcp = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1)
+        self.compute_intermediate()
         obj = self.target_pos
         tcp_opened = self.actions[:, -1] >0
 
-        tcp_to_target = torch.norm(tcp - obj, dim = 1)
+        tcp_to_target = torch.norm(self.tcp - obj, dim = 1)
         goal_to_target = torch.norm(obj - self.goal, dim = 1)
         inplace_margin = self.init_dist.clone()
 
@@ -111,10 +110,9 @@ class FrankaPickEnv(FrankaBaseEnv):
         return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        tcp_pos = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1)
-        self.update_target_pos()
-        goal_to_target = torch.norm(tcp_pos - self.goal, dim=1)
-        tcp_to_target = torch.norm(tcp_pos - self.target_pos, dim = 1)
+        self.compute_intermediate()
+        goal_to_target = torch.norm(self.tcp - self.goal, dim=1)
+        tcp_to_target = torch.norm(self.tcp - self.target_pos, dim = 1)
         
         contacts_dones_condition = torch.any(torch.norm(self.sensor.data.net_forces_w[:, self.undesired_contact_body_ids, :], dim=-1) > 1e-3, dim = -1)
         dones = torch.logical_or(contacts_dones_condition, self.target_pos[:,-1]<0.8)
