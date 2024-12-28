@@ -380,6 +380,7 @@ class FrankaBaseEnv(DirectRLEnv):
     def _get_observations(self) -> dict:
         img = self.camera.data.output['rgb'] #(num_envs, H, W, 4)
         img = img[:,:,:,:-1]
+        img = torch.permute(img,(0, 3, 1, 2))
         observations = {"policy": img}
         return observations
 
