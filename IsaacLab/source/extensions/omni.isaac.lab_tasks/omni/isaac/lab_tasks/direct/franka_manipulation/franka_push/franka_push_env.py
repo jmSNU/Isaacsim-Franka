@@ -10,60 +10,47 @@ from ..reward_utils.reward_utils import *
 
 @configclass
 class FrankaPushEnvCfg(FrankaBaseEnvCfg):
-    table_size = (0.7, 0.7)
+    use_visual_obs = False
+    use_visual_marker = False
+    num_observations = [3, 64, 64] if use_visual_obs else 27
 
 class FrankaPushEnv(FrankaBaseEnv):
     cfg: FrankaPushEnvCfg
     def __init__(self, cfg: FrankaPushEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
- 
+    
+    def _check_success(self) -> torch.Tensor:
+        self.compute_intermediate()
+        return torch.norm(self.target_pos - self.goal, dim = 1) < 0.05
+
 
     def _get_rewards(self) -> torch.Tensor:
-        self.update_target_pos()
-        tcp_pos = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1)
-        tcp_to_target = torch.norm(tcp_pos - self.target_pos, dim = 1)
-        goal_to_target = torch.norm(self.target_pos - self.goal, dim = 1)
-        goal_to_target_init = self.init_dist.clone()
-        
-        reward = torch.zeros(self.num_envs, device = self.device, dtype = torch.float32)
-        
-        in_place = tolerance(
-            goal_to_target, 
-            bounds=(0, 0.05), 
-            margin=goal_to_target_init, 
-            sigmoid="long_tail")
-        
-        object_grasped = self._gripper_grasp_reward(
-            self.actions,
-            self.target_pos,
-            obj_reach_radius=0.04,
-            obj_radius=0.02,
-            pad_success_thresh=0.05,
-            xz_thresh=0.05,
-            desired_gripper_effort=0.7,
-            medium_density=True
-        )
-        
-        reward = hamacher_product(object_grasped, in_place)
-        tcp_target_condition = torch.logical_and(tcp_to_target < 0.02, self.actions[:,-1] >0)
-        goal_target_condition = goal_to_target < 0.05
-        
-        reward[tcp_target_condition] += 1.0 + 5.0 * in_place[tcp_target_condition]
-        reward[goal_target_condition] = 10.0
-        
-        return reward
+        self.compute_intermediate()
+        reward = torch.zeros((self.num_envs,), device=self.device)
+
+        success_ids = self._check_success()
+        reward[success_ids] = 2.25
+
+        tcp_to_target_dist = self._tcp_to_target(return_dist=True)
+        reaching_reward = 1 - torch.tanh(10.0 * tcp_to_target_dist[~success_ids])
+        reward[~success_ids] += reaching_reward * 0.5  
+
+        target_to_goal_dist = torch.norm(self.target_pos[~success_ids] - self.goal[~success_ids], dim=1)
+        pushing_reward = 1 - torch.tanh(5.0 * target_to_goal_dist)
+        reward[~success_ids] += pushing_reward * 0.75 
+
+        return reward / 2.25
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        tcp_pos = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1)
-        self.update_target_pos()
-        goal_to_target = torch.norm(tcp_pos - self.goal, dim=1)
-        tcp_to_target = torch.norm(tcp_pos - self.target_pos, dim = 1)
+        self.compute_intermediate()
+        goal_to_target = torch.norm(self.tcp - self.goal, dim=1)
+        tcp_to_target = torch.norm(self.tcp - self.target_pos, dim = 1)
         
         contacts_dones_condition = torch.any(torch.norm(self.sensor.data.net_forces_w[:, self.undesired_contact_body_ids, :], dim=-1) > 1e-3, dim = -1)
         dones = torch.logical_or(contacts_dones_condition, self.target_pos[:,-1]<0.8)
         dones = torch.logical_or(tcp_to_target>=1.0, dones)
         dones = torch.logical_or(goal_to_target>=0.7, dones)
-        dones = torch.logical_or(goal_to_target<=0.01, dones)
+        dones = torch.logical_or(goal_to_target<=0.05, dones)
 
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         return dones, time_out
@@ -71,12 +58,22 @@ class FrankaPushEnv(FrankaBaseEnv):
     def _reset_idx(self, env_ids: Sequence[int] | None):
         super()._reset_idx(env_ids)
 
-        goal_pose = self.update_goal_or_target(target_pos=self.target_pos.clone(), dz_range=(0.0, 0.0))
-        self.goal[env_ids,:] = goal_pose[env_ids,:3].clone() # destination to arrive
+        tcp_to_goal = torch.zeros((len(env_ids),))
+        goal_to_target = torch.zeros((len(env_ids),))
+
+        for i, env_id in enumerate(env_ids):
+            while True:
+                goal_pose = self.update_goal_or_target(offset = self.on_table_pos, which = "goal", dx_range = (0.1, 0.2), dy_range = (-0.1, 0.1), dz_range = (0.0, 0.0))
+                tcp_to_goal[i] = torch.norm(goal_pose[env_id,:3] - self.init_tcp[env_id,:])
+                goal_to_target[i] = torch.norm(self.target_pos[env_id,:] - goal_pose[env_id,:3])
+                if tcp_to_goal[i] > 0.1 and goal_to_target[i] > 0.1:
+                    break
+            self.goal[env_id,:] = goal_pose[env_id,:3].clone() # destination to arrive        
         self.init_dist[env_ids] = torch.norm(self.target_pos[env_ids,:] - self.goal[env_ids,:], dim = 1)
 
         marker_locations = self.goal
         marker_orientations = torch.tensor([1, 0, 0, 0],dtype=torch.float32).repeat(self.num_envs,1).to(self.device)  
         marker_indices = torch.zeros((self.num_envs,), dtype=torch.int32)  
-        self.target_marker.visualize(translations = marker_locations, orientations = marker_orientations, marker_indices = marker_indices)
+        if self.cfg.use_visual_marker:
+            self.marker.visualize(translations = marker_locations, orientations = marker_orientations, marker_indices = marker_indices)
 
