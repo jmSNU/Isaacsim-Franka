@@ -47,7 +47,10 @@ python IsaacLab/source/standalone/tutorials/00_sim/create_empty.py
 ```
 
 ## Environments
-- [Isaac-Franka-Reach-v0](https://github.com/jmSNU/IsaacSim-Franka/blob/main/IsaacLab/source/extensions/omni.isaac.lab_tasks/omni/isaac/lab_tasks/direct/franka_manipulation/franka_reach)
-- [Isaac-Franka-Push-v0](https://github.com/jmSNU/Isaacsim-Franka/tree/main/IsaacLab/source/extensions/omni.isaac.lab_tasks/omni/isaac/lab_tasks/direct/franka_manipulation/franka_push)
-- [Isaac-Franka-Lift-v0](https://github.com/jmSNU/Isaacsim-Franka/tree/main/IsaacLab/source/extensions/omni.isaac.lab_tasks/omni/isaac/lab_tasks/direct/franka_manipulation/franka_lift)
-- [Isaac-Franka-Pick-v0](https://github.com/jmSNU/Isaacsim-Franka/tree/main/IsaacLab/source/extensions/omni.isaac.lab_tasks/omni/isaac/lab_tasks/direct/franka_manipulation/franka_pick)
+- [Isaac-Franka-Reach-v0](https://github.com/jmSNU/IsaacSim-Franka/blob/main/IsaacLab/source/extensions/omni.isaac.lab_tasks/omni/isaac/lab_tasks/direct/franka_manipulation/franka_reach) : Reach a target position using the Franka Panda arm.
+- [Isaac-Franka-Push-v0](https://github.com/jmSNU/Isaacsim-Franka/tree/main/IsaacLab/source/extensions/omni.isaac.lab_tasks/omni/isaac/lab_tasks/direct/franka_manipulation/franka_push) : Push an object to a designated location.
+- [Isaac-Franka-Lift-v0](https://github.com/jmSNU/Isaacsim-Franka/tree/main/IsaacLab/source/extensions/omni.isaac.lab_tasks/omni/isaac/lab_tasks/direct/franka_manipulation/franka_lift) : Lift an object to a specified height.
+- [Isaac-Franka-Pick-v0](https://github.com/jmSNU/Isaacsim-Franka/tree/main/IsaacLab/source/extensions/omni.isaac.lab_tasks/omni/isaac/lab_tasks/direct/franka_manipulation/franka_pick) : Pick up an object and place it at a target location.
+
+> **Note:**  
+>The reward function design for all environments except Isaac-Franka-Reach-v0 and Isaac-Franka-Push-v0 follows the approach used in [Robosuite](https://robosuite.ai), a popular framework for robotic manipulation. Robosuite provides well-structured reward functions that focus on task-specific goals such as object lifting, and placing.
