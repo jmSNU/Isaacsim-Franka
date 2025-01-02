@@ -6,6 +6,8 @@ from .franka_push.franka_push_env import FrankaPushEnv, FrankaPushEnvCfg
 from .franka_push import push_agents
 from .franka_pick.franka_pick_env import FrankaPickEnv, FrankaPickEnvCfg
 from .franka_pick import pick_agents
+from .franka_lift.franka_lift_env import FrankaLiftEnv, FrankaLiftEnvCfg
+from .franka_lift import lift_agents
 from .reward_utils import *
 ##
 # Register Gym environments.
@@ -46,4 +48,15 @@ gym.register(
     },
 )
 
+gym.register(
+    id="Isaac-Franka-Lift-v0",
+    entry_point="omni.isaac.lab_tasks.direct.franka_manipulation.franka_lift.franka_lift_env:FrankaLiftEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": FrankaLiftEnvCfg,
+        "rl_games_cfg_entry_point": f"{lift_agents.__name__}:rl_games_ppo_cfg.yaml",
+        "sb3_cfg_entry_point" : f"{lift_agents.__name__}:sb3_sac_cfg.yaml",
+        "rsl_rl_cfg_entry_point": f"{lift_agents.__name__}.rsl_rl_ppo_cfg:frankaPPORunnerCfg"
+    },
+)
 
