@@ -22,16 +22,20 @@ from omni.isaac.lab.envs import mdp
 from omni.isaac.lab.managers import EventTermCfg as EventTerm
 from .reward_utils.reward_utils import *
 from omni.isaac.lab.markers import VisualizationMarkers, VisualizationMarkersCfg
-
+from pxr import UsdGeom, Gf
+import omni.usd
+import omni.isaac.lab.utils.math as math_utils
 
 @configclass
 class FrankaBaseEnvCfg(DirectRLEnvCfg):
     decimation = 4
     episode_length_s = 10.0
     action_scale = 0.5
-    num_actions = 7+1 # (x, y, z, qw, qx, qy, qz) + gripper
-    num_observations = [3, 64, 64] # rgb image
-    enable_obstacle = False
+    num_actions = 6+1 # (x, y, z, roll, pitch, yaw) + gripper
+
+    use_visual_obs = True
+    use_visual_marker = True
+    num_observations = [3, 64, 64] if use_visual_obs else 27
     table_size = (0.7, 1.2, 1.0)
 
     # ground plane
@@ -68,10 +72,12 @@ class FrankaBaseEnvCfg(DirectRLEnvCfg):
 
     # robot
     robot = FRANKA_PANDA_HIGH_PD_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+    body_offset_pos = (-0.2, 0.0, 1.0)
+    body_offset_rot = (1.0, 0.0, 0.0, 0.0)
 
     # objects
     target = RigidObjectCfg(
-        prim_path="/World/envs/env_.*/Object",
+        prim_path="/World/envs/env_.*/Target",
         init_state=RigidObjectCfg.InitialStateCfg(pos=[0.2, 0, 1.0], rot=[0.7071, 0.7071, 0, 0]),
         spawn=sim_utils.UsdFileCfg(
             usd_path = "usd/sugar_box.usd",
@@ -91,44 +97,24 @@ class FrankaBaseEnvCfg(DirectRLEnvCfg):
         )
     )
 
-    obstacle = RigidObjectCfg(
-        prim_path ="/World/envs/env_.*/Obstacle",
-        init_state = RigidObjectCfg.InitialStateCfg(pos=[0.2, 0, 1.0], rot=[0.7071, 0, 0.7071, 0]),
-        spawn=sim_utils.UsdFileCfg(
-            usd_path = "usd/cracker_box.usd",
-            rigid_props=RigidBodyPropertiesCfg(
-                        solver_position_iteration_count=16,
-                        solver_velocity_iteration_count=1,
-                        max_angular_velocity=1000.0,
-                        max_linear_velocity=1000.0,
-                        max_depenetration_velocity=5.0,
-                        disable_gravity=False,
-                    ),
-            mass_props=sim_utils.MassPropertiesCfg(mass=0.3),
-            collision_props=sim_utils.CollisionPropertiesCfg(
-                collision_enabled = True,
-            ),
-            visual_material_path = "cracker_box_texture.png"
-        )
-    )
-
     # sensors
-    camera = CameraCfg(
-        prim_path="/World/envs/env_.*/Robot/camera",
-        offset=CameraCfg.OffsetCfg(
-            pos=(2.7, 0.0, 1.1), 
-            rot=(0.0, -0.174, 0.0, 0.985), 
-            convention="world"
-        ),  
-        spawn=sim_utils.PinholeCameraCfg(
-            focal_length=386.2455 / 128 * 20.955,  
-            focus_distance=400.0, 
-            horizontal_aperture=20.955,  
-            clipping_range=(0.1, 1.0e5), 
-        ),
-        data_types=["rgb"], 
-        width=num_observations[1], height=num_observations[2],  
-    )
+    if use_visual_obs:
+        camera = CameraCfg(
+            prim_path="/World/envs/env_.*/Robot/camera",
+            offset=CameraCfg.OffsetCfg(
+                pos=(2.7, 0.0, 1.1), 
+                rot=(0.0, -0.174, 0.0, 0.985), 
+                convention="world"
+            ),  
+            spawn=sim_utils.PinholeCameraCfg(
+                focal_length=386.2455 / 128 * 20.955,  
+                focus_distance=400.0, 
+                horizontal_aperture=20.955,  
+                clipping_range=(0.1, 1.0e5), 
+            ),
+            data_types=["rgb"], 
+            width=num_observations[1], height=num_observations[2],  
+        )
 
     sensor = ContactSensorCfg(
         prim_path="/World/envs/env_.*/Robot/.*", update_period=0.0, history_length=6, debug_vis=True
@@ -200,7 +186,6 @@ class FrankaBaseEnv(DirectRLEnv):
     def __init__(self, cfg: FrankaBaseEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
         self.action_scale = self.cfg.action_scale
-        
         self.dt = self.cfg.sim.dt * self.cfg.decimation
 
         # Body and Joint ids querying
@@ -208,8 +193,11 @@ class FrankaBaseEnv(DirectRLEnv):
         self.body_ids, body_names = self.robot.find_bodies(['.*'], preserve_order = True) # ['panda_link0', 'panda_link1', 'panda_link2', 'panda_link3', 'panda_link4', 'panda_link5', 'panda_link6', 'panda_link7', 'panda_hand', 'panda_leftfinger', 'panda_rightfinger']
         self.num_joints = len(self.joint_ids)
 
+        self.offset_pos = torch.tensor(self.cfg.body_offset_pos, device=self.device).repeat(self.num_envs, 1)
+        self.offset_rot = torch.tensor(self.cfg.body_offset_rot, device=self.device).repeat(self.num_envs, 1)
+
         # For easy IDs indexing.
-        self.robot_entity_cfg = SceneEntityCfg("robot", joint_names=[".*"], body_names=["panda_hand"])
+        self.robot_entity_cfg = SceneEntityCfg("robot", joint_names=["panda_joint.*"], body_names=["panda_hand"])
         self.robot_entity_cfg.resolve(self.scene)
 
         if self.robot.is_fixed_base:
@@ -219,8 +207,6 @@ class FrankaBaseEnv(DirectRLEnv):
 
         self.ee_idx = self.robot_entity_cfg.body_ids[0] # 'panda_hand'
         self.finger_idx, _ = self.robot.find_bodies(['panda_leftfinger', 'panda_rightfinger'], preserve_order = True)
-        self.pos_joint_ids, _ = self.robot.find_joints(['panda_joint1', 'panda_joint2', 'panda_joint3'], preserve_order = True)
-        self.rot_joint_ids, _ = self.robot.find_joints(['panda_joint5', 'panda_joint6', 'panda_joint7'], preserve_order = True)
         self.gripper_joint_ids, _ = self.robot.find_joints(['panda_finger_joint1', 'panda_finger_joint2'], preserve_order = True)
         self.undesired_contact_body_ids, _ = self.robot.find_bodies(['panda_link0', 'panda_link1', 'panda_link2', 'panda_link3', 'panda_link4', 'panda_link5', 'panda_link6', 'panda_link7'])
         self.gripper_open_position = 0.0
@@ -228,21 +214,8 @@ class FrankaBaseEnv(DirectRLEnv):
 
         # IK solver setting
         ik_cfg = DifferentialIKControllerCfg(
-            command_type="position", 
-            use_relative_mode=False, # (x, y, z)
-            ik_method="dls",
-            ik_params = {
-                "pinv": {"k_val": 1.0},
-                "svd": {"k_val": 1.0, "min_singular_value": 1e-5},
-                "trans": {"k_val": 1.0},
-                "dls": {"lambda_val": 0.01},
-            },
-        )
-        self.diff_ik_controller_position = DifferentialIKController(ik_cfg, num_envs=cfg.scene.num_envs, device=self.scene["robot"].device)
-
-        ik_cfg = DifferentialIKControllerCfg(
             command_type="pose", 
-            use_relative_mode=False, # (x, y, z, qw, qx, qy, qz)
+            use_relative_mode=True, # (dx, dy, dz, droll, dpitch, dyaw)
             ik_method="dls",
             ik_params = {
                 "pinv": {"k_val": 1.0},
@@ -264,24 +237,25 @@ class FrankaBaseEnv(DirectRLEnv):
 
         self.goal = self.table_pos.clone()
         self.init_dist = torch.norm(self.target_pos - self.goal, dim = 1)
-        self.marker = self._define_markers() # visualize the target position  
+        if self.cfg.use_visual_marker:
+            self.marker = self._define_markers() # visualize the target position  
+
+        self.tcp_marker = self._define_markers(radius=0.03, diffuse_color=(0.0, 0.0, 1.0))
 
     def _setup_scene(self):
         # Scene setting : robot, camera, table, walls, YCB Target
         self.table = RigidObject(self.cfg.table)
         self.robot = Articulation(self.cfg.robot)
-        self.camera = Camera(self.cfg.camera)
+        if self.cfg.use_visual_obs:
+            self.camera = Camera(self.cfg.camera)
         self.sensor = ContactSensor(self.cfg.sensor)
         self.target = RigidObject(self.cfg.target)
-        if self.cfg.enable_obstacle:
-            self.obstacle = RigidObject(self.cfg.obstacle)
 
         self.scene.articulations['robot'] = self.robot
-        self.scene.sensors['camera'] = self.camera
+        if self.cfg.use_visual_obs:
+            self.scene.sensors['camera'] = self.camera
         self.scene.sensors['sensor'] = self.sensor
         self.scene.rigid_objects['target'] = self.target
-        if self.cfg.enable_obstacle:
-            self.scene.rigid_objects['obstacle'] = self.obstacle
         self.scene.rigid_objects['table'] = self.table
 
         # Terrain setting
@@ -298,57 +272,20 @@ class FrankaBaseEnv(DirectRLEnv):
         light_cfg.func("/World/Light", light_cfg)
         
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
-        self.actions = self.action_scale * actions.clone()
+        processed_actions = actions[:,:-1] * self.action_scale
+        ee_pos_curr, ee_quat_curr = self._compute_frame_pose()
+        self.diff_ik_controller.set_command(processed_actions, ee_pos_curr, ee_quat_curr)
 
-    def _apply_action(self) -> None:
-        # clipping action
-        # pos_low = torch.tensor(np.array([-0.1,-0.2,-0.2]), device = self.device)
-        # pos_high = torch.tensor(np.array([0.2,0.2,0.2]), device = self.device)
-        # roll_range = torch.tensor(np.array([-np.pi*5/180, np.pi*5/180]), device = self.device)
-        # pitch_range = torch.tensor(np.array([-np.pi*5/180, np.pi*5/180]), device = self.device)
-        # yaw_range = torch.tensor(np.array([-np.pi*5/180, np.pi*5/180]), device = self.device)
-        # quat_low = quat_from_euler_xyz(roll_range[0], pitch_range[0], yaw_range[0])
-        # quat_high = quat_from_euler_xyz(roll_range[1], pitch_range[1], yaw_range[1])
+    def _apply_action(self):
+        ee_pos_curr, ee_quat_curr = self._compute_frame_pose()
+        joint_pos = self.robot.data.joint_pos[:, self.robot_entity_cfg.joint_ids]
+        if ee_quat_curr.norm() != 0:
+            jacobian = self._compute_frame_jacobian()
+            joint_pos_des = self.diff_ik_controller.compute(ee_pos_curr, ee_quat_curr, jacobian, joint_pos)
+        else:
+            joint_pos_des = joint_pos.clone()
+        self.robot.set_joint_position_target(joint_pos_des, self.robot_entity_cfg.joint_ids)
 
-        # clipping ee position
-        # low = self.table_pos + torch.tensor(np.array([-self.cfg.table_size[0]/2, -self.cfg.table_size[1]/2, 0.5]), device = self.device)
-        # high = self.table_pos + torch.tensor(np.array([self.cfg.table_size[0]/2, self.cfg.table_size[1]/2, 1.5]), device = self.device)
-        dummy_pos = torch.zeros(self.num_envs, 3, device = self.device, dtype = torch.float32)
-
-        ee_pose_w = self.robot.data.body_state_w[:, self.ee_idx, 0:7]
-        root_pose_w = self.robot.data.root_state_w[:, 0:7]
-
-        # joint_action_pos = torch.clamp(self.actions[:,:3], pos_low, pos_high) + ee_pose_w[:,:3]   
-        joint_action_pos = self.actions[:,:3]
-        # joint_action_pos = torch.clamp(joint_action_pos, low, high)     
-        joint_action_pos = torch.as_tensor(joint_action_pos, dtype = torch.float32, device = self.device)
-
-        # joint_action_quat = quat_mul(torch.clamp(self.actions[:,3:-1], quat_low, quat_high), ee_pose_w[:,3:])
-        joint_action_quat = self.actions[:,3:-1]
-        joint_action_quat = joint_action_quat/torch.norm(joint_action_quat, dim = 1, keepdim = True)
-        joint_action_quat = torch.as_tensor(joint_action_quat, dtype = torch.float32, device = self.device)
-
-        ee_pos_b, ee_quat_b = subtract_frame_transforms(
-            root_pose_w[:, 0:3], root_pose_w[:, 3:7], joint_action_pos, joint_action_quat # change the coordinate from world to robot base
-        )
-
-        ik_commands = torch.zeros(self.num_envs, self.diff_ik_controller_position.action_dim, device=self.device)
-        ik_commands[:] = ee_pos_b
-        self.diff_ik_controller_position.set_command(ik_commands, ee_quat=ee_quat_b)
-
-        ik_commands = torch.zeros(self.num_envs, self.diff_ik_controller.action_dim, device = self.device)
-        ik_commands[:] = torch.cat([dummy_pos, ee_quat_b], dim = 1)
-        self.diff_ik_controller.set_command(ik_commands)
-
-        # Calculate joint_position from IK solver
-        joint_positions = self._compute_joint_positions_from_targets(self.pos_joint_ids, self.diff_ik_controller_position)
-        joint_orientation = self._compute_joint_positions_from_targets(self.rot_joint_ids, self.diff_ik_controller)
-
-        # Apply actions to the robot
-        self.robot.set_joint_position_target(joint_positions, joint_ids = self.pos_joint_ids)    
-        self.robot.set_joint_position_target(joint_orientation, joint_ids = self.rot_joint_ids)
-
-        # Gripper Action
         raw_gripper_action = self.actions[:,-1]
         binary_mask = raw_gripper_action>0
         binary_mask = binary_mask.unsqueeze(1).expand(-1, 2)
@@ -364,24 +301,61 @@ class FrankaBaseEnv(DirectRLEnv):
         gripper_action = torch.where(binary_mask, open_command, close_command)
         self.robot.set_joint_position_target(gripper_action, joint_ids = self.gripper_joint_ids)
 
-    def _compute_joint_positions_from_targets(self,joint_ids, ik_controller) -> torch.Tensor:
-        """Calculate the joint position by using IK solver. Refer to https://isaac-sim.github.io/IsaacLab/source/tutorials/05_controllers/run_diff_ik.html"""
-        jacobian = self.robot.root_physx_view.get_jacobians()[:, self.ee_jacobi_idx, :, joint_ids]
-        ee_pose_w = self.robot.data.body_state_w[:, self.ee_idx, 0:7]
-        root_pose_w = self.robot.data.root_state_w[:, 0:7]
-        joint_pos = self.robot.data.joint_pos[:, joint_ids]
-
-        ee_pos_b, ee_quat_b = subtract_frame_transforms(
+        marker_orientations = torch.tensor([1, 0, 0, 0],dtype=torch.float32).repeat(self.num_envs,1).to(self.device)  
+        marker_indices = torch.zeros((self.num_envs,), dtype=torch.int32)  
+        self.tcp_marker.visualize(translations = self.tcp, orientations = marker_orientations, marker_indices = marker_indices)
+    
+    def _compute_frame_pose(self) -> tuple[torch.Tensor, torch.Tensor]:
+        ee_pose_w = self.robot.data.body_state_w[:, self.ee_idx, :7]
+        root_pose_w = self.robot.data.root_state_w[:, :7]
+        ee_pose_b, ee_quat_b = math_utils.subtract_frame_transforms(
             root_pose_w[:, 0:3], root_pose_w[:, 3:7], ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
         )
-        joint_pos_des = ik_controller.compute(ee_pos_b, ee_quat_b, jacobian, joint_pos)
-        return joint_pos_des
+        if self.offset_pos is not None:
+            ee_pose_b, ee_quat_b = math_utils.combine_frame_transforms(
+                ee_pose_b, ee_quat_b, self.offset_pos, self.offset_rot
+            )
+
+        return ee_pose_b, ee_quat_b
+
+    def _compute_frame_jacobian(self):
+        jacobian = self.robot.root_physx_view.get_jacobians()[:, self.ee_jacobi_idx, :, self.robot_entity_cfg.joint_ids]
+        if self.offset_pos is not None:
+            jacobian[:, 0:3, :] += torch.bmm(-math_utils.skew_symmetric_matrix(self.offset_pos), jacobian[:, 3:, :])
+            jacobian[:, 3:, :] = torch.bmm(math_utils.matrix_from_quat(self.offset_rot), jacobian[:, 3:, :])
+        return jacobian
 
     def _get_observations(self) -> dict:
-        img = self.camera.data.output['rgb'] #(num_envs, H, W, 4)
-        img = img[:,:,:,:-1]
-        img = torch.permute(img,(0, 3, 1, 2))
-        observations = {"policy": img}
+        self.compute_intermediate()
+        if self.cfg.use_visual_obs:
+            img = self.camera.data.output['rgb'] #(num_envs, H, W, 4)
+            img = img[:,:,:,:-1]
+            img = torch.permute(img,(0, 3, 1, 2))
+            observations = {"policy": img}
+        else:
+            joint_pos_rel = self.robot.data.joint_pos[:, self.robot_entity_cfg.joint_ids] - self.robot.data.default_joint_pos[:, self.robot_entity_cfg.joint_ids]
+            joint_vel_rel = self.robot.data.joint_vel[:, self.robot_entity_cfg.joint_ids] - self.robot.data.default_joint_vel[:, self.robot_entity_cfg.joint_ids]
+            actions = self.actions
+            target_pos = self.target_pos
+            target_pos_b, _ = subtract_frame_transforms(
+                self.robot.data.root_state_w[:, :3], self.robot.data.root_state_w[:, 3:7], target_pos
+            )
+            goal_pos = self.goal
+            goal_pos_b, _ = subtract_frame_transforms(
+                self.robot.data.root_state_w[:, :3], self.robot.data.root_state_w[:, 3:7], goal_pos
+            )
+
+            obs = torch.cat(
+                (
+                    joint_pos_rel,
+                    joint_vel_rel,
+                    actions,
+                    target_pos_b,
+                    goal_pos_b
+                ),
+                dim=-1,
+            )
+            observations = {"policy": torch.clamp(obs, -5.0, 5.0)}
         return observations
 
     def _get_rewards(self) -> torch.Tensor:
@@ -396,12 +370,12 @@ class FrankaBaseEnv(DirectRLEnv):
         super()._reset_idx(env_ids)
 
         self.robot.reset(env_ids)
-        self.camera.reset(env_ids)
+        if self.cfg.use_visual_obs:
+            self.camera.reset(env_ids)
         self.sensor.reset(env_ids)
         self.table.reset(env_ids)
         self.target.reset(env_ids)
         self.diff_ik_controller.reset(env_ids)
-        self.diff_ik_controller_position.reset(env_ids)
 
         joint_pos = self.robot.data.default_joint_pos[env_ids] + sample_uniform(
             -0.15,
@@ -427,7 +401,7 @@ class FrankaBaseEnv(DirectRLEnv):
 
         for i, env_id in enumerate(env_ids):
             while True:
-                goal_pose = self.update_goal_or_target(offset = self.on_table_pos, which = "goal",dx_range = (0.1, 0.2), dy_range = (-0.1, 0.1), dz_range = (0.05, 0.3))
+                goal_pose = self.update_goal_or_target(offset = self.on_table_pos, which = "goal", dx_range = (0.1, 0.2), dy_range = (-0.1, 0.1), dz_range = (0.05, 0.3))
                 tcp_to_goal[i] = torch.norm(goal_pose[env_id,:3] - self.init_tcp[env_id,:])
                 goal_to_target[i] = torch.norm(self.target_pos[env_id,:] - goal_pose[env_id,:3])
                 if tcp_to_goal[i] > 0.15 and goal_to_target[i] > 0.15:
@@ -440,65 +414,56 @@ class FrankaBaseEnv(DirectRLEnv):
         marker_locations = self.goal
         marker_orientations = torch.tensor([1, 0, 0, 0],dtype=torch.float32).repeat(self.num_envs,1).to(self.device)  
         marker_indices = torch.zeros((self.num_envs,), dtype=torch.int32)  
-        self.marker.visualize(translations = marker_locations, orientations = marker_orientations, marker_indices = marker_indices)
+        if self.cfg.use_visual_marker:
+            self.marker.visualize(translations = marker_locations, orientations = marker_orientations, marker_indices = marker_indices)
 
-    """ Reference : https://github.com/Farama-Foundation/Metaworld/blob/cca35cff0ec62f1a18b11440de6b09e2d10a1380/metaworld/envs/mujoco/sawyer_xyz/sawyer_xyz_env.py#L699 """
-    def _gripper_grasp_reward(self, action, obj_pos, obj_radius, pad_success_thresh, obj_reach_radius, xz_thresh, desired_gripper_effort = 1.0, high_density = False, medium_density = False):
-        if high_density and medium_density:
-            raise ValueError("Can only be either high_density or medium_density")
-        
-        tcp_pos = torch.mean(self.robot.data.body_state_w[:, self.finger_idx, 0:3], dim = 1) # (N, 3)
-        left_pad = self.robot.data.body_state_w[:, self.finger_idx[0], 0:3] # (N, 3)
-        rigth_pad = self.robot.data.body_state_w[:, self.finger_idx[1], 0:3] # (N, 3)
+        self.tcp_marker.visualize(translations = self.tcp, orientations = marker_orientations, marker_indices = marker_indices)
 
-        pad_y_lr = torch.stack((left_pad[:, 1], rigth_pad[:, 1]), dim = 1) # (N, 2)
-        pad_to_obj_lr = torch.abs(pad_y_lr - obj_pos[:, 1].unsqueeze(-1)) #(N, 2)
-        pad_to_objinit_lr = torch.abs(pad_y_lr - self.target_init_pos[:,1].unsqueeze(-1))
+    def _check_grasp(self, action, obj_pos, obj_radius, pad_success_thresh, xz_thresh, desired_gripper_effort=1.0):
+        self.compute_intermediate()
+        tcp_pos = self.tcp.clone()
+        left_pad = self.robot.data.body_state_w[:, self.finger_idx[0], 0:3]  # (N, 3)
+        right_pad = self.robot.data.body_state_w[:, self.finger_idx[1], 0:3]  # (N, 3)
 
-        caging_lr_margin = torch.abs(pad_to_objinit_lr - pad_success_thresh)
+        # Calculate caging in the Y axis
+        pad_y_lr = torch.stack((left_pad[:, 1], right_pad[:, 1]), dim=1)  # (N, 2)
+        pad_to_obj_lr = torch.abs(pad_y_lr - obj_pos[:, 1].unsqueeze(-1))  # (N, 2)
         caging_lr = [
             tolerance(
                 pad_to_obj_lr[:, i],
-                bounds = (obj_radius, pad_success_thresh),
-                margin = caging_lr_margin[:, i],
-                sigmoid="long_tail"
+                bounds=(obj_radius, pad_success_thresh),
+                margin=torch.abs(pad_to_obj_lr[:, i] - pad_success_thresh),
+                sigmoid="long_tail",
             )
             for i in range(2)
         ]
-
         caging_y = hamacher_product(*caging_lr)
 
-        xz = [0,2]
-        caging_xz_margin = torch.norm(self.target_init_pos[:,xz] - self.init_tcp[:, xz], dim = 1)
-        caging_xz_margin -= xz_thresh
+        # Calculate caging in the XZ plane
+        xz = [0, 2]
+        diff = torch.norm(tcp_pos[:, xz] - obj_pos[:, xz], dim=1) - xz_thresh
+        margin = torch.where(diff>0, diff, 0)
         caging_xz = tolerance(
-            torch.norm(tcp_pos[:, xz] - obj_pos[:, xz]),
-            bounds = (0, xz_thresh),
-            margin = caging_xz_margin,
-            sigmoid="long_tail"
+            torch.norm(tcp_pos[:, xz] - obj_pos[:, xz], dim=1),
+            bounds=(0, xz_thresh),
+            margin=margin,
+            sigmoid="long_tail",
         )
-        
-        gripper_closed = torch.where(action[:, -1] < 0, desired_gripper_effort, 0.0)  
-        gripper_closed = gripper_closed / desired_gripper_effort
+
+        # Combine caging Y and XZ
         caging = hamacher_product(caging_y, caging_xz)
-        gripping = torch.where(caging>0.97, gripper_closed, 0.0) 
-        caging_and_gripping = hamacher_product(caging, gripping)
 
-        if high_density:
-            caging_and_gripping = (caging_and_gripping + caging) / 2
-        if medium_density:
-            tcp_to_obj = torch.norm(obj_pos - tcp_pos, dim = 1)
-            tcp_to_obj_init = torch.norm(self.target_init_pos - self.init_tcp, dim = 1)
-            reach_margin = torch.abs(tcp_to_obj_init - obj_reach_radius)
-            reach = tolerance(
-                tcp_to_obj,
-                bounds=(0, obj_reach_radius),
-                margin=reach_margin,
-                sigmoid="long_tail"
-            )
-            caging_and_gripping = (caging_and_gripping + reach.to(torch.float32)) / 2
+        # Check if the gripper is closed
+        gripper_closed = torch.where(action[:, -1] < 0, desired_gripper_effort, 0.0)  # Gripper effort
+        gripper_closed = gripper_closed / desired_gripper_effort
 
-        return caging_and_gripping
+        # Gripping check: caging and gripper closed
+        gripping = torch.where(caging > 0.97, gripper_closed, 0.0)
+
+        # Grasp is successful if both caging and gripping are satisfied
+        grasp_success = gripping > 0.5  # Threshold for successful grasp
+
+        return grasp_success
     
     def compute_intermediate(self):
         self.target_pos = self.target.data.root_state_w[:,:3].clone()
@@ -509,8 +474,10 @@ class FrankaBaseEnv(DirectRLEnv):
             offset = torch.zeros((self.num_envs, 3), device=self.device)
 
         if which == "target":
-            x_half = self.cfg.table_size[0]/2 - 0.05
-            y_half = self.cfg.table_size[1]/2 - 0.05
+            # x_half = self.cfg.table_size[0]/2 - 0.1
+            # y_half = self.cfg.table_size[1]/2 - 0.1
+            x_half = 0.1
+            y_half = 0.1
             x = torch.rand(self.num_envs, 1) * 2*x_half - x_half
             y = torch.rand(self.num_envs, 1) * 2*y_half - y_half
             z = torch.ones((self.num_envs, 1)) * 0.5 
@@ -554,15 +521,22 @@ class FrankaBaseEnv(DirectRLEnv):
             output[:, 1] = torch.clamp(output[:, 1], self.table_pos[:, 1] - self.cfg.table_size[1]/2, self.table_pos[:, 1] + self.cfg.table_size[1]/2)
             output[:, 2] = torch.clamp(output[:, 2], 1.0, 2.0)
             return output
-    
-    def _define_markers(self) -> VisualizationMarkers:
+        
+    def _tcp_to_target(self, return_dist = False):
+        self.compute_intermediate()
+        tcp_pos = self.tcp.clone()
+        target_pos = self.target_pos.clone()
+        diff = target_pos - tcp_pos
+        return torch.norm(diff, dim = 1) if return_dist else diff
+
+    def _define_markers(self, radius = 0.05, diffuse_color = (1.0, 0.0, 0.0)) -> VisualizationMarkers:
         """Define markers to visualize the target position."""
         marker_cfg = VisualizationMarkersCfg(
             prim_path="/Visuals/TargetMarkers",
             markers={
                 "target": sim_utils.SphereCfg(  
-                    radius=0.05,  
-                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)), 
+                    radius=radius,  
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=diffuse_color), 
                 ),
             },
         )
