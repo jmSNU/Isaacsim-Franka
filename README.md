@@ -6,6 +6,10 @@ This repository provides a custom Reinforcement Learning (RL) environment using 
 > **Note:**  
 > This repository is currently in an **experimental stage**. Some features may not work as expected, and further refinement is ongoing. Users are encouraged to provide feedback and contribute.
 
+### Current Limitations:
+- Training with **single image observations** using SAC (Soft Actor-Critic) often fails to improve the reward. 
+- However, when using **proprioceptive observations** (e.g., joint positions, velocities), noticeable reward improvement has been observed.
+
 
 ## Prerequisites
 Before starting, make sure you have the following installed:
