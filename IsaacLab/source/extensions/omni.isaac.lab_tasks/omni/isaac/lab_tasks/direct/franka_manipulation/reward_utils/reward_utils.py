@@ -59,7 +59,9 @@ def _sigmoid(x, value_at_1, sigmoid):
 
 def tolerance(x, bounds, margin, sigmoid, value_at_margin=0.1):
     lower, upper = bounds
-    assert lower < upper and torch.all(margin > 0)
+    if lower > upper and torch.all(margin < 0) :
+        message = f"""lower value{lower} must be smaller than {upper}""" if lower>upper else """margin should be larger than zero"""
+        raise Exception(message)
     
     # Check if x is within bounds
     in_bounds = torch.logical_and(lower <= x, x <= upper)
