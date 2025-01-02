@@ -1,0 +1,31 @@
+# seed: 42
+
+# n_timesteps: !!float 1e6
+# policy: 'CnnPolicy'
+# batch_size: 104
+# learning_rate: 0.000728
+# buffer_size: 79709
+# ent_coef: 0.008345
+# gamma: 0.920970
+# tau:  0.034480
+# train_freq: 1
+# gradient_steps: 10
+# learning_starts: 7126
+# policy_kwargs: "dict(net_arch=[512, 256], normalize_images=False)"
+# use_sde: True
+
+seed: 42
+
+n_timesteps: !!float 5e6
+policy: 'MlpPolicy'
+batch_size: 104
+learning_rate: 0.000728
+buffer_size: 79709
+ent_coef: 0.008345
+gamma: 0.920970
+tau:  0.034480
+train_freq: 1
+gradient_steps: 10
+learning_starts: 7126
+policy_kwargs: "dict(net_arch=[512, 256])"
+use_sde: True
