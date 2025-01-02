@@ -136,12 +136,6 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     else:
         ee_jacobi_idx = robot_entity_cfg.body_ids[0]
 
-    print(robot_entity_cfg.body_ids)
-    print(robot_entity_cfg.body_names)
-    print(ee_jacobi_idx)
-    print(robot.find_bodies([".*"]))
-    
-
     # Define simulation stepping
     sim_dt = sim.get_physics_dt()
     count = 0
