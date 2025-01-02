@@ -3,6 +3,10 @@
 ## Introduction
 This repository provides a custom Reinforcement Learning (RL) environment using the Franka Panda arm. The environment is designed to accept visual information as input, allowing for the development and testing of vision-based RL algorithms. It integrates NVIDIA Isaac Sim for realistic simulation, providing a robust platform for robotics research and experimentation.
 
+> **Note:**  
+> This repository is currently in an **experimental stage**. Some features may not work as expected, and further refinement is ongoing. Users are encouraged to provide feedback and contribute.
+
+
 ## Prerequisites
 Before starting, make sure you have the following installed:
 
