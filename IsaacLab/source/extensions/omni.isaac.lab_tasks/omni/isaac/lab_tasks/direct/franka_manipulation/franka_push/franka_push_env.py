@@ -11,7 +11,7 @@ from ..reward_utils.reward_utils import *
 @configclass
 class FrankaPushEnvCfg(FrankaBaseEnvCfg):
     use_visual_obs = False
-    use_visual_marker = False
+    use_visual_marker = True
     num_observations = [3, 64, 64] if use_visual_obs else 27
 
 class FrankaPushEnv(FrankaBaseEnv):
@@ -36,7 +36,7 @@ class FrankaPushEnv(FrankaBaseEnv):
         reward[~success_ids] += reaching_reward * 0.5  
 
         target_to_goal_dist = torch.norm(self.target_pos[~success_ids] - self.goal[~success_ids], dim=1)
-        pushing_reward = 1 - torch.tanh(5.0 * target_to_goal_dist)
+        pushing_reward = 1 - torch.tanh(10.0 * target_to_goal_dist)
         reward[~success_ids] += pushing_reward * 0.75 
 
         return reward / 2.25
@@ -48,9 +48,9 @@ class FrankaPushEnv(FrankaBaseEnv):
         
         contacts_dones_condition = torch.any(torch.norm(self.sensor.data.net_forces_w[:, self.undesired_contact_body_ids, :], dim=-1) > 1e-3, dim = -1)
         dones = torch.logical_or(contacts_dones_condition, self.target_pos[:,-1]<0.8)
-        dones = torch.logical_or(tcp_to_target>=1.0, dones)
-        dones = torch.logical_or(goal_to_target>=0.7, dones)
-        dones = torch.logical_or(goal_to_target<=0.05, dones)
+        dones = torch.logical_or(tcp_to_target>=1.5, dones)
+        dones = torch.logical_or(goal_to_target>=1.5, dones)
+        dones = torch.logical_or(self._check_success(), dones)
 
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         return dones, time_out
@@ -63,10 +63,10 @@ class FrankaPushEnv(FrankaBaseEnv):
 
         for i, env_id in enumerate(env_ids):
             while True:
-                goal_pose = self.update_goal_or_target(offset = self.on_table_pos, which = "goal", dx_range = (0.1, 0.2), dy_range = (-0.1, 0.1), dz_range = (0.0, 0.0))
+                goal_pose = self.update_goal_or_target(offset = self.on_table_pos, which = "goal", dx_range = (0.1, 0.2), dy_range = (-0.3, 0.3), dz_range = (0.0, 0.0))
                 tcp_to_goal[i] = torch.norm(goal_pose[env_id,:3] - self.init_tcp[env_id,:])
                 goal_to_target[i] = torch.norm(self.target_pos[env_id,:] - goal_pose[env_id,:3])
-                if tcp_to_goal[i] > 0.1 and goal_to_target[i] > 0.1:
+                if tcp_to_goal[i] > 0.1 and goal_to_target[i] > 0.2:
                     break
             self.goal[env_id,:] = goal_pose[env_id,:3].clone() # destination to arrive        
         self.init_dist[env_ids] = torch.norm(self.target_pos[env_ids,:] - self.goal[env_ids,:], dim = 1)
