@@ -25,7 +25,7 @@ class FrankaLiftEnv(FrankaBaseEnv):
         self.compute_intermediate()
         target_height = self.target_pos[:,2]
         table_height = self.cfg.table_size[2]
-        return target_height>table_height + 0.1
+        return target_height>table_height + 0.05
             
     def _get_rewards(self) -> torch.Tensor:
         self.compute_intermediate()
@@ -51,7 +51,7 @@ class FrankaLiftEnv(FrankaBaseEnv):
         
         contacts_dones_condition = torch.any(torch.norm(self.sensor.data.net_forces_w[:, self.undesired_contact_body_ids, :], dim=-1) > 1e-3, dim = -1)
         dones = torch.logical_or(contacts_dones_condition, self.target_pos[:,-1]<0.8)
-        dones = torch.logical_or(tcp_to_target>=1.0, dones)
+        dones = torch.logical_or(tcp_to_target>=1.5, dones)
         dones = torch.logical_or(self._check_success(), dones)
 
         time_out = self.episode_length_buf >= self.max_episode_length - 1
