@@ -30,7 +30,7 @@ import omni.isaac.lab.utils.math as math_utils
 class FrankaBaseEnvCfg(DirectRLEnvCfg):
     decimation = 4
     episode_length_s = 10.0
-    action_scale = 0.5
+    action_scale = 1.0
     num_actions = 6+1 # (x, y, z, roll, pitch, yaw) + gripper
 
     use_visual_obs = True
@@ -378,8 +378,8 @@ class FrankaBaseEnv(DirectRLEnv):
         self.diff_ik_controller.reset(env_ids)
 
         joint_pos = self.robot.data.default_joint_pos[env_ids] + sample_uniform(
-            -0.15,
-            0.15,
+            -0.125,
+            0.125,
             (len(env_ids), self.num_joints),
             self.device,
         )
