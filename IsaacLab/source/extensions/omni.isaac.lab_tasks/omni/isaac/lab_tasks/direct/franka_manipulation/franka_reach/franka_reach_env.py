@@ -8,7 +8,7 @@ from ..reward_utils.reward_utils import *
 class FrankaReachEnvCfg(FrankaBaseEnvCfg):
     episode_length_s = 5.0
     use_visual_obs = False
-    use_visual_marker = False
+    use_visual_marker = True
     num_observations = [3, 64, 64] if use_visual_obs else 27
 
 class FrankaReachEnv(FrankaBaseEnv):
@@ -29,7 +29,7 @@ class FrankaReachEnv(FrankaBaseEnv):
         reward[success_ids] = 2.25
 
         dist = torch.norm(self.tcp - self.goal, dim = 1)
-        reaching_reward = 1 - torch.tanh(10.0 * dist[~success_ids])  #
+        reaching_reward = 1 - torch.tanh(10.0 * dist[~success_ids]) 
         reward[~success_ids] += reaching_reward
 
         return reward / 2.25
@@ -39,8 +39,8 @@ class FrankaReachEnv(FrankaBaseEnv):
         tcp_to_goal = torch.norm(self.tcp - self.goal, dim = 1)
         
         contacts_dones_condition = torch.any(torch.norm(self.sensor.data.net_forces_w[:, self.undesired_contact_body_ids, :], dim=-1) > 1e-3, dim = -1)
-        dones = torch.logical_or(tcp_to_goal>=1.0, contacts_dones_condition)
-        dones = torch.logical_or(tcp_to_goal<=0.05, dones)
+        dones = torch.logical_or(tcp_to_goal>=1.5, contacts_dones_condition)
+        dones = torch.logical_or(self._check_success(), dones)
 
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         return dones, time_out
